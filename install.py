@@ -1,30 +1,24 @@
 import os
-
 import launch
-
-try:
-    import trt_paths
-except Exception as e:
-    print("Could not find TensorRT directory; skipping install", e)
-
 
 def install():
     if not launch.is_installed("tensorrt"):
-        trt_whl_path = os.path.join(trt_paths.trt_path, "python")
-        matching_files = [os.path.join(trt_whl_path, x) for x in os.listdir(trt_whl_path)]
-        matching_files = [x for x in matching_files if "tensorrt-" in x and "cp310" in x]
-        if len(matching_files) == 0:
-            print(f"Could not find TensorRT .whl installer; looked in {trt_whl_path}")
+        launch.run_pip(f"install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.0.post11.dev1", "tensorrt")
 
-        whl = matching_files[0]
-        launch.run_pip(f'install "{whl}"', "TensorRT wheel")
+    if launch.is_installed("cuda-python"):
+        from cuda import cudart
+        cudaVersion = cudart.cudaRuntimeGetVersion()[1]
+        if cudaVersion != "11080":
+            raise RuntimeError("Wrong cuda_python version installed: Got {} expected 11.8.2".format(cudaVersion))
+    else:
+        launch.run_pip(f'install cuda-python==11.8.2', "cuda-python")
 
-    if not launch.is_installed("pycuda"):
-        launch.run_pip(f'install pycuda', "pycuda")
+    if not launch.is_installed("polygraphy"):
+        launch.run_pip(f'install polygraphy', "polygraphy")
 
-    if not launch.is_installed("onnx"):
-        launch.run_pip(f'install onnx', "onnx")
+    # Not yet needed - would allow refitting the onnx model/engine
+    # if not launch.is_installed("onnx_graphsurgeon"):
+    #     launch.run_pip(f'install onnx_graphsurgeon', "onnx_graphsurgeon")
+    
 
-
-if trt_paths:
-    install()
+install()

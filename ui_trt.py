@@ -66,7 +66,9 @@ def convert_onnx_to_trt(filename, onnx_filename, *args):
     filename = get_trt_filename(filename, onnx_filename)
     command = export_trt.get_trt_command(filename, onnx_filename, *args)
 
-    launch.run(command, live=True)
+    # launch.run(command, live=True)
+
+
 
     return f'Saved as {filename}', ''
 
@@ -108,6 +110,7 @@ def on_ui_tabs():
 
                         with FormRow(elem_classes="checkboxes-row", variant="compact"):
                             use_fp16 = gr.Checkbox(label='Use half floats', value=True, elem_id="trt_fp16")
+                            fix_dim = gr.Checkbox(label='O', value=True, elem_id="fix_dim")
 
                         button_export_trt = gr.Button(value="Convert ONNX to TensorRT", variant='primary', elem_id="trt_convert_from_onnx")
                         button_show_trt_command = gr.Button(value="Show command for conversion", variant='secondary', elem_id="trt_convert_from_onnx")
