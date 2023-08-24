@@ -1,14 +1,10 @@
 import os.path
 
 from collections import OrderedDict
-from copy import copy
-import numpy as np
 import os
 from polygraphy.backend.trt import CreateConfig, Profile
 from polygraphy.backend.trt import engine_from_network, network_from_onnx_path, save_engine
 import tensorrt as trt
-import torch
-from cuda import cudart as cudart
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
@@ -184,7 +180,7 @@ def get_trt_command(trt_filename, onnx_filename, min_bs, max_bs, min_token_count
                'context' :      ((min_bs * 2, min_token_count // 75 * 77, cond_dim), (min_bs * 2,  min_token_count // 75 * 77, cond_dim), (max_bs * 2, max_token_count // 75 * 77, cond_dim)),
                }
     
-    print("Building profile {}".fomrat(profile))
+    print("Building profile {}".format(profile))
 
     # find a smart way to detect cache file
     cache_file = os.path.dirname(trt_filename) + "\{}".format("trt_timing_cache.cache")

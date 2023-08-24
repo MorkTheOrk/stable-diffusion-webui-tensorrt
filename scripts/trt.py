@@ -6,15 +6,6 @@ import torch
 from modules import script_callbacks, sd_unet, devices, shared, paths_internal
 
 import ui_trt
-from cuda import cudart as cudart
-
-def CUASSERT(cuda_ret):
-    err = cuda_ret[0]
-    if err != cudart.cudaError_t.cudaSuccess:
-         raise RuntimeError(f"CUDA ERROR: {err}, error code reference: https://nvidia.github.io/cuda-python/module/cudart.html#cuda.cudart.cudaError_t")
-    if len(cuda_ret) > 1:
-        return cuda_ret[1]
-    return None
 
 class TrtUnetOption(sd_unet.SdUnetOption):
     def __init__(self, filename, name):
@@ -55,16 +46,16 @@ class TrtUnet(sd_unet.SdUnet):
         self.buffers_shape = buffers_shape
         self.buffers = {}
 
-        for binding in self.engine:
-            binding_idx = self.engine.get_binding_index(binding)
-            dtype = self.nptype(self.engine.get_binding_dtype(binding))
+        for binding in self.trtcontext.engine:
+            binding_idx = self.trtcontext.engine.get_binding_index(binding)
+            dtype = self.nptype(self.trtcontext.engine.get_binding_dtype(binding))
 
             if binding in feed_dict:
                 shape = Dims(feed_dict[binding].shape)
             else:
                 shape = self.trtcontext.get_binding_shape(binding_idx)
 
-            if self.engine.binding_is_input(binding):
+            if self.trtcontext.engine.binding_is_input(binding):
                 if not self.trtcontext.set_binding_shape(binding_idx, shape): # return value might be borked
                     print(f'bad shape for TensorRT input {binding}: {tuple(shape)}')
 
@@ -79,23 +70,19 @@ class TrtUnet(sd_unet.SdUnet):
         for name, tensor in feed_dict.items():
             self.buffers[name].copy_(tensor)
 
+
         for name, tensor in self.buffers.items():
             self.trtcontext.set_tensor_address(name, tensor.data_ptr())
 
-        if self.cuda_graph_instance is not None:
-            if cudart.cudaGraphLaunch(self.cuda_graph_instance, self.cudaStream)[0] != cudart.cudaError_t.cudaSuccess:
-                raise RuntimeError("Error in trt.py: Could not run cudaGraph")
-        else:
-            # do inference before CUDA graph capture
-            self.trtcontext.execute_async_v3(self.cudaStream)
-            # capture cuda graph
-            CUASSERT(cudart.cudaStreamBeginCapture(self.cudaStream, cudart.cudaStreamCaptureMode.cudaStreamCaptureModeGlobal))
-            self.trtcontext.execute_async_v3(self.cudaStream)
-            self.graph = CUASSERT(cudart.cudaStreamEndCapture(self.cudaStream))
-            self.cuda_graph_instance = CUASSERT(cudart.cudaGraphInstantiateWithFlags(self.graph, 0))
+        self.trtcontext.execute_async_v3(self.cudaStream)
 
     def forward(self, x, timesteps, context, *args, **kwargs):
+        tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
+        self.trtcontext.device_memory = tmp.data_ptr()
+        self.cudaStream = torch.cuda.current_stream(device=tmp.device).cuda_stream
+
         self.infer({"x": x, "timesteps": timesteps, "context": context})
+
         return self.buffers["output"].to(dtype=x.dtype, device=devices.device)
 
     def activate(self):
@@ -106,10 +93,11 @@ class TrtUnet(sd_unet.SdUnet):
         self.nptype = trt.nptype
 
         with open(self.filename, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
+            engine = runtime.deserialize_cuda_engine(f.read())
+            self.engine_vram_req = engine.device_memory_size
+            self.trtcontext = engine.create_execution_context_without_device_memory()
 
-        self.trtcontext = self.engine.create_execution_context()
-        self.cudaStream = cudart.cudaStreamCreate()[1]
+
         assert(self.trtcontext)
 
     def deactivate(self):
