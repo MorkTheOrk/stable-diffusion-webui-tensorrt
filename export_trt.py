@@ -162,11 +162,48 @@ class EngineBuilder():
         )
         save_engine(engine, path=self.engine_path)
 
+def get_unet_trt_profile(cond_dim, min_bs, opt_bs ,max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height):
+    profile = {
+            'x' :          ((min_bs * 2, 4, min_height // 8, min_width // 8), (opt_bs * 2, 4, opt_width // 8, opt_height // 8), (max_bs * 2, 4, max_height // 8, max_width // 8)),
+            'timesteps' :  ((min_bs * 2,), (opt_bs * 2,), (max_bs * 2,)),
+            'context' :    ((min_bs * 2, min_token_count // 75 * 77, cond_dim), (opt_bs * 2,  opt_token_count // 75 * 77, cond_dim), (max_bs * 2, max_token_count // 75 * 77, cond_dim)),
+            }
+    return profile
+
+def get_trt_profile_filename(profile):
+    return "unet_{}x{}x{}".format(int(profile['x'][0][2] * 8), int(profile['x'][0][3] * 8), int(profile['x'][0][0]/2))
+
+def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512_512_1, profile_512_512_4, profile_768x768x1, profile_768x768x4, use_fp16):
+    
+    cond_dim = 768  # XXX should be detected for SD2.0
+    profiles = []
+    if profile_512_512_1:
+        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 , 1, 75, 75, 75, 512, 512, 512, 512, 512, 512))
+    if profile_512_512_4:
+        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 , 4, 75, 75, 75, 512, 512, 512, 512, 512, 512))
+    if profile_768x768x1:
+        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 , 1, 75, 75, 75, 768, 768, 768, 768, 768, 768)) 
+    if profile_768x768x4:
+        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 , 4, 75, 75, 75, 768, 768, 768, 768, 768, 768))
+
+    for profile in profiles:
+
+        config_name = get_trt_profile_filename(profile)
+        trt_engine_name = os.path.dirname(trt_filename) + "\{}.trt".format(config_name)
+
+        if os.path.isfile(trt_engine_name):
+            print("Skipping engine build for config: {}, engine already exsists. ({})".format(config_name, trt_engine_name))
+            continue
+
+        cache_file = os.path.dirname(trt_filename) + "\{}_timing.cache".format(config_name)
+        print("Using cache file {}".format(cache_file))
+
+        builder = EngineBuilder(trt_engine_name)
+        builder.build(onnx_path=onnx_filename, fp16=True, input_profile=profile, timing_cache=cache_file)
 
 
-def get_trt_command(trt_filename, onnx_filename, min_bs, max_bs, min_token_count, max_token_count, min_width, max_width, min_height, max_height, use_fp16, trt_extra_args):
+def generate_trt_engine(trt_filename, onnx_filename, min_bs, opt_bs, max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height, use_fp16, trt_extra_args):
 
-    builder = EngineBuilder(trt_filename)
 
     # To Automatic1111 cond_dim can be detected with polygraphy
     cond_dim = 768  # XXX should be detected for SD2.0
@@ -174,17 +211,23 @@ def get_trt_command(trt_filename, onnx_filename, min_bs, max_bs, min_token_count
     with torch.no_grad():
         torch.cuda.empty_cache()
     
-    # Dict Input tensor name -> min, opt, max
-    profile = {'x' :            ((min_bs * 2, 4, min_height // 8, min_width // 8), (min_bs * 2, 4, 512 // 8, 512 // 8), (max_bs * 2, 4, max_height // 8, max_width // 8)),
-               'timesteps' :    ((min_bs * 2,), (min_bs * 2,), (max_bs * 2,)),
-               'context' :      ((min_bs * 2, min_token_count // 75 * 77, cond_dim), (min_bs * 2,  min_token_count // 75 * 77, cond_dim), (max_bs * 2, max_token_count // 75 * 77, cond_dim)),
-               }
+    profile = get_unet_trt_profile(cond_dim, min_bs, opt_bs, max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height)
+
     
+    config_name = get_trt_profile_filename(profile) 
+
+    
+    trt_engine_name = os.path.dirname(trt_filename) + "\{}.trt".format(config_name)
+    if os.path.isfile(trt_engine_name):
+        print("Skipping engine build for config: {}, engine already exsists. ({})".format(config_name, trt_engine_name))
+        return ""
     print("Building profile {}".format(profile))
 
     # find a smart way to detect cache file
-    cache_file = os.path.dirname(trt_filename) + "\{}".format("trt_timing_cache.cache")
+    cache_file = os.path.dirname(trt_filename) + "\{}_timing.cache".format(config_name)
     print("Using cache file {}".format(cache_file))
+
+    builder = EngineBuilder(trt_engine_name)
     builder.build(onnx_path=onnx_filename, fp16=use_fp16, input_profile=profile, timing_cache=cache_file)
 
     return ""
