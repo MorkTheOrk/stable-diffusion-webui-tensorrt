@@ -3,7 +3,9 @@ import launch
 
 def install():
     if not launch.is_installed("tensorrt"):
-        launch.run_pip(f"install --pre --index-url https://pypi.nvidia.com tensorrt==9.0.0.post11.dev1", "tensorrt")
+        launch.run_pip(f"install nvidia-cudnn-cu11==8.9.4.25", "nvidia-cudnn-cu11")
+        launch.run_pip(f"install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.0.post11.dev1", "tensorrt")
+        launch.run_pip(f" uninstall -y nvidia-cudnn-cu11", "removing nvidia-cudnn-cu11")
 
     # ONNX parser
     if not launch.is_installed("polygraphy"):
