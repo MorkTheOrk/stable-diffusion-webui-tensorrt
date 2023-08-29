@@ -26,25 +26,19 @@ def get_trt_filename(filename, onnx_filename):
     if filename:
         return filename
 
-    # modelname = os.path.splitext(os.path.basename(onnx_filename))[0] + ".trt"
     return os.path.join(paths_internal.models_path, "Unet-trt", "")
-
-
-# def generate_trt_engine(filename, onnx_filename, *args):
-#     get_trt_filename(filename, onnx_filename)
-
 
 
 def convert_onnx_to_trt(filename, onnx_filename, *args):
     assert not cmd_opts.disable_extension_access, "won't run the command to create TensorRT file because extension access is dsabled (use --enable-insecure-extension-access)"
     filename = get_trt_filename(filename, onnx_filename)
-    command = export_trt.generate_trt_engine(filename, onnx_filename, *args)
+    export_trt.generate_trt_engine(filename, onnx_filename, *args)
     return f'Saved as {filename}', ''
 
 def convert_onnx_to_trt_preset(filename, onnx_filename, *args):
     assert not cmd_opts.disable_extension_access, "won't run the command to create TensorRT file because extension access is dsabled (use --enable-insecure-extension-access)"
     filename = get_trt_filename(filename, onnx_filename)
-    command = export_trt.generate_trt_engine_presets(filename, onnx_filename, *args)
+    export_trt.generate_trt_engine_presets(filename, onnx_filename, *args)
     return f'Saved as {filename}', ''
 
 

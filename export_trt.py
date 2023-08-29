@@ -4,6 +4,7 @@ from collections import OrderedDict
 import os
 from polygraphy.backend.trt import CreateConfig, Profile
 from polygraphy.backend.trt import engine_from_network, network_from_onnx_path, save_engine
+import torch
 import tensorrt as trt
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
@@ -132,6 +133,14 @@ class EngineBuilder():
     #         exit(0)
 
     def build(self, onnx_path, fp16, input_profile=None, enable_refit=False, enable_preview=False, enable_all_tactics=False, timing_cache=None, workspace_size=0):
+        trt_dir = os.path.dirname(self.engine_path)
+        if not os.path.exists(trt_dir):
+            os.mkdir(trt_dir)
+
+        
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
         p = Profile()
         if input_profile:
@@ -203,13 +212,9 @@ def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512_512_1, 
 
 
 def generate_trt_engine(trt_filename, onnx_filename, min_bs, opt_bs, max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height, use_fp16, trt_extra_args):
-
-
-    # To Automatic1111 cond_dim can be detected with polygraphy
+    # cond_dim can be detected with polygraphy
+    trt_dir = os.path.dirname(trt_filename)
     cond_dim = 768  # XXX should be detected for SD2.0
-    import torch
-    with torch.no_grad():
-        torch.cuda.empty_cache()
     
     profile = get_unet_trt_profile(cond_dim, min_bs, opt_bs, max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height)
 
@@ -217,12 +222,12 @@ def generate_trt_engine(trt_filename, onnx_filename, min_bs, opt_bs, max_bs, min
     config_name = get_trt_profile_filename(profile) 
 
     
-    trt_engine_name = os.path.dirname(trt_filename) + "\{}.trt".format(config_name)
+    trt_engine_name = trt_dir + "\{}.trt".format(config_name)
     if os.path.isfile(trt_engine_name):
         print("Skipping engine build for config: {}, engine already exsists. ({})".format(config_name, trt_engine_name))
         return ""
+    
     print("Building profile {}".format(profile))
-
     # find a smart way to detect cache file
     cache_file = os.path.dirname(trt_filename) + "\{}_timing.cache".format(config_name)
     print("Using cache file {}".format(cache_file))
