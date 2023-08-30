@@ -180,20 +180,24 @@ def get_unet_trt_profile(cond_dim, min_bs, opt_bs ,max_bs, min_token_count, opt_
     return profile
 
 def get_trt_profile_filename(profile):
-    return "unet_{}x{}x{}".format(int(profile['x'][0][2] * 8), int(profile['x'][0][3] * 8), int(profile['x'][0][0]/2))
+    return "unet_w[{},{},{}],h[{},{},{}],b[{},{},{}],t[{},{},{}]" \
+        .format(int(profile['x'][0][3] * 8), int(profile['x'][1][3] * 8),int(profile['x'][2][3] * 8), 
+        int(profile['x'][0][2] * 8), int(profile['x'][1][2] * 8),int(profile['x'][2][2] * 8),
+        int(profile['x'][0][0]/2),int(profile['x'][1][0]/2),int(profile['x'][2][0]/2),
+        int(profile['context'][0][1]/77*75),int(profile['context'][1][1]/77*75),int(profile['context'][2][1]/77*75))
 
 def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512_512_1, profile_512_512_4, profile_768x768x1, profile_768x768x4, use_fp16):
     
     cond_dim = 768  # XXX should be detected for SD2.0
     profiles = []
     if profile_512_512_1:
-        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 , 1, 75, 75, 75, 512, 512, 512, 512, 512, 512))
+        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 ,1, 75, 75, 75, 512, 512, 512, 512, 512, 512))
     if profile_512_512_4:
-        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 , 4, 75, 75, 75, 512, 512, 512, 512, 512, 512))
+        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 ,4, 75, 75, 75, 512, 512, 512, 512, 512, 512))
     if profile_768x768x1:
-        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 , 1, 75, 75, 75, 768, 768, 768, 768, 768, 768)) 
+        profiles.append(get_unet_trt_profile(cond_dim, 1, 1 ,1, 75, 75, 75, 768, 768, 768, 768, 768, 768)) 
     if profile_768x768x4:
-        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 , 4, 75, 75, 75, 768, 768, 768, 768, 768, 768))
+        profiles.append(get_unet_trt_profile(cond_dim, 4, 4 ,4, 75, 75, 75, 768, 768, 768, 768, 768, 768))
 
     for profile in profiles:
 

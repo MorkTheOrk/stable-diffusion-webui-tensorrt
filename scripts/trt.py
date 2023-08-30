@@ -38,7 +38,6 @@ class TrtUnet(sd_unet.SdUnet):
         self.cuda_graph_instance = None
 
     def allocate_buffers(self, feed_dict):
-        from tensorrt import Dims
         buffers_shape = sum([x.shape for x in feed_dict.values()], ())
         if self.buffers_shape == buffers_shape:
             return
@@ -46,6 +45,7 @@ class TrtUnet(sd_unet.SdUnet):
         self.buffers_shape = buffers_shape
         self.buffers = {}
 
+        from tensorrt import Dims
         for binding in self.trtcontext.engine:
             binding_idx = self.trtcontext.engine.get_binding_index(binding)
             dtype = self.nptype(self.trtcontext.engine.get_binding_dtype(binding))
@@ -63,9 +63,7 @@ class TrtUnet(sd_unet.SdUnet):
             self.buffers[binding] = tensor
 
     def infer(self, feed_dict):
-        
-        if not self.buffers:
-            self.allocate_buffers(feed_dict)
+        self.allocate_buffers(feed_dict)
 
         for name, tensor in feed_dict.items():
             self.buffers[name].copy_(tensor)
