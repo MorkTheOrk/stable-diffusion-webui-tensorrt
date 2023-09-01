@@ -141,12 +141,20 @@ class EngineBuilder():
         with torch.no_grad():
             torch.cuda.empty_cache()
 
+
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
+
+        replaceList = ['"']
+        for match in replaceList:
+            if match in onnx_path:
+                 onnx_path = onnx_path.replace(match,'')
         p = Profile()
         if input_profile:
             for name, dims in input_profile.items():
                 assert len(dims) == 3
                 p.add(name, min=dims[0], opt=dims[1], max=dims[2])
+
+
 
         config_kwargs = {}
 
@@ -186,16 +194,20 @@ def get_trt_profile_filename(profile):
         int(profile['x'][0][0]/2),int(profile['x'][1][0]/2),int(profile['x'][2][0]/2),
         int(profile['context'][0][1]/77*75),int(profile['context'][1][1]/77*75),int(profile['context'][2][1]/77*75))
 
-def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512_512_1, profile_512_512_4, profile_768x768x1, profile_768x768x4, use_fp16):
+def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512_512_1, profile_512_512_2, profile_512_512_4, profile_768x768x1, profile_768x768x2, profile_768x768x4, use_fp16):
     
     cond_dim = 768  # XXX should be detected for SD2.0
     profiles = []
     if profile_512_512_1:
         profiles.append(get_unet_trt_profile(cond_dim, 1, 1 ,1, 75, 75, 75, 512, 512, 512, 512, 512, 512))
+    if profile_512_512_2:
+        profiles.append(get_unet_trt_profile(cond_dim, 2, 2 ,2, 75, 75, 75, 512, 512, 512, 512, 512, 512))    
     if profile_512_512_4:
         profiles.append(get_unet_trt_profile(cond_dim, 4, 4 ,4, 75, 75, 75, 512, 512, 512, 512, 512, 512))
     if profile_768x768x1:
         profiles.append(get_unet_trt_profile(cond_dim, 1, 1 ,1, 75, 75, 75, 768, 768, 768, 768, 768, 768)) 
+    if profile_768x768x2:
+        profiles.append(get_unet_trt_profile(cond_dim, 2, 2 ,2, 75, 75, 75, 768, 768, 768, 768, 768, 768))     
     if profile_768x768x4:
         profiles.append(get_unet_trt_profile(cond_dim, 4, 4 ,4, 75, 75, 75, 768, 768, 768, 768, 768, 768))
 
