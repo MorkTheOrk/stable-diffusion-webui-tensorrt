@@ -1,6 +1,8 @@
 import os
 import numpy as np
 
+import ldm.modules.diffusionmodules.openaimodel
+
 import torch
 
 from modules import script_callbacks, sd_unet, devices, shared, paths_internal
@@ -33,7 +35,7 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine = None
         self.trtcontext = None
         self.buffers = None
-        self.buffers_shape = ()
+        self.buffers_shape = {}
         self.nptype = None
         self.cuda_graph_instance = None
 
@@ -41,6 +43,8 @@ class TrtUnet(sd_unet.SdUnet):
         buffers_shape = sum([x.shape for x in feed_dict.values()], ())
         if self.buffers_shape == buffers_shape:
             return
+        # elif self.buffers != None: # does not adapt to dynamic shapes & wrong initial input
+        #     raise RuntimeError(f"Tensor shape does not match: {self.buffers_shape} expected, got {buffers_shape}. Are the input dimensions supported by selected engine?")
 
         self.buffers_shape = buffers_shape
         self.buffers = {}
@@ -89,14 +93,14 @@ class TrtUnet(sd_unet.SdUnet):
         TRT_LOGGER = trt.Logger(trt.ILogger.Severity.VERBOSE)
         trt.init_libnvinfer_plugins(None, "")
         self.nptype = trt.nptype
-
+        # torch.cuda.set_device(devices.device)
         with open(self.filename, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
             engine = runtime.deserialize_cuda_engine(f.read())
             self.engine_vram_req = engine.device_memory_size
             self.trtcontext = engine.create_execution_context_without_device_memory()
 
 
-        assert(self.trtcontext)
+        assert(self.trtcontext is not None)
 
     def deactivate(self):
         self.engine = None

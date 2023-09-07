@@ -1,36 +1,32 @@
-# TensorRT support for webui
+# TensorRT for Web-UI
 
-Adds the ability to convert loaded model's Unet module into TensortRT. Requires version least after commit [339b5315](htts://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/339b5315700a469f4a9f0d5afc08ca2aca60c579) (currently, it's the `dev` branch after 2023-05-27). Only tested to work on Windows.
+This extension for Web-UI allows you to export the Unet of Stable diffusion to TensorRT and generate images faster!
 
-Loras are baked in into the converted model. Hypernetwork support is not tested. Controlnet is not supported. Textual inversion works normally.
+## Installation
+This extension can be installed just like any other extension for Automatic1111:
+1. Start the `webui.bat`
+2. Select the `Extensions` tab and click on `Install from URL`
+3. Copy the link to this repository and paste it into `URL for extension's git repository`
+4. Click `Install`
 
-NVIDIA is also working on releaseing their version of TensorRT for webui, which might be more performant, but they can't release it yet.
-
-There seems to be support for quickly replacing weight of a TensorRT engine without rebuilding it, and this extension does not offer this option yet.
-
-## How to install
-
-Apart from installing the extension normally, you also need to download zip with TensorRT from [NVIDIA](https://developer.nvidia.com/nvidia-tensorrt-8x-download).
-
-You need to choose the same version of CUDA as python's torch library is using. For torch 2.0.1 it is CUDA 11.8.
-
-Extract the zip into extension directory, so that `TensorRT-8.6.1.6` (or similarly named dir) exists in the same place as `scripts` directory and `trt_path.py` file. Restart webui afterwards.
-
-You don't need to install CUDA separately.
+### Requirements 
+##### TensorRT for Web-UI will `automatically` install required dependencies and initialize itself:
+* `TensorRT` (9.0 Pre-release version will be installed)
+* `Polygraphy` (for Onnx parsing and storing)
+* `Onnx` (export of networks)
 
 ## How to use
+The webui will show a TensorRT Tab after installation. You have two options in this tab:
+1. Convert to ONNX
+2. Convert ONNX to TensorRT (Preset config)
 
-1. Slect the model you want to optimize and make a picture with it, including needed loras and hypernetworks.
-2. Go to a `TensorRT` tab that appears if the extension loads properly.
-3. In `Convert to ONNX` tab, press `Convert Unet to ONNX`.
-   * This takes a short while.
-   * After the conversion has finished, you will find an `.onnx` file with model in `models/Unet-onnx` directory.
-4. In `Convert ONNX to TensorRT` tab, configure the necessary parameters (including writing full path to onnx model) and press `Convert ONNX to TensorRT`.
-   * This takes very long - from 15 minues to an hour.
-   * This takes up a lot of VRAM: you might want to press "Show command for conversion" and run the command yourself after shutting down webui.
-   * After the conversion has finished, you will find a `.trt` file with model in `models/Unet-trt` directory.
-5. In settings, in `Stable Diffusion` page, use `SD Unet` option to select newly generated TensorRT model.
-6. Generate pictures.
+### Convert to ONNX
+This tab allows you to export the `current selected` Stable Diffusion checkpoint to Onnx. You only need to `export it once` as long as you dont change anything for the checkpoint. LoRAs that are inside will also be exported to Onnx, so remember to update your ONNX file when modifiying the checkpoint. 
 
-## Stable Diffusion 2.0 support
-Stable diffusion 2.0 conversion should fail for both ONNX and TensorRT because of incompatible shapes, but you may be able to rememdy this by chaning instances of 768 to 1024 in the code.
+
+### Convert ONNX to TensorRT (Preset config)
+Here you can select an ONNX file (located in `models/Unet-onnx`) and convert it to TensorRT with selected presets. The presets are the labeled with `Width x Height x Batch_size`. You can select multiple presets and export them to TensorRT. Warning: This process takes a long time and is memory intensive, you can see some debug print in the terminal while converting. You will find TensorRT engines in `models/Unet-trt` once the conversion finished.
+
+### Using TensorRT engines
+
+In settings in the Webui, go to the `Stable Diffusion` tab and select your TensorRT engine under `SD Unet`
