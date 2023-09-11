@@ -74,8 +74,24 @@ class EngineBuilder():
         save_engine(engine, path=self.engine_path)
 
         
-def fetch_remote_cache():
-    EngineBuilder.TRT_REMOTE_CACHE_FILE = None
+NVIDIA_CACHE_URL = "https://"  
+def fetch_remote_cache(sd_version, sd_hash, trt_path):
+    if EngineBuilder.TRT_REMOTE_CACHE_FILE is None or False: # feature disabled
+        import requests
+        cc_maj, cc_min = torch.cuda.get_device_capability()
+        remote_cache_name = f"{sd_version}_{sd_hash}_cc_{cc_maj}{cc_min}.cache"
+        download_url = f"{NVIDIA_CACHE_URL}"
+        r = requests.get(url=download_url)
+        if r.ok:
+            r_cache_path = os.path.join(trt_path, remote_cache_name)
+            open(r_cache_path, 'wb').write(r.content)
+            EngineBuilder.TRT_REMOTE_CACHE_FILE = r_cache_path
+        else:
+            raise RuntimeWarning("Warning! Could not download remote cache file, falling back.(Status Code {r.status_code})")
+
+
+        
+    
 
 def get_unet_trt_profile(cond_dim, min_bs, opt_bs ,max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height):
     profile = {
@@ -102,7 +118,7 @@ def generate_trt_engine_presets(trt_filename, onnx_filename, profile_512x512x1, 
     
     trt_dir = os.path.dirname(trt_filename)
     cond_dim = get_cond_dim_from_onnx(onnx_filename)
-
+    fetch_remote_cache(8,9,trt_dir)
     profiles = {}
     if profile_512x512x1:
         profiles["512x512x1"] = get_unet_trt_profile(cond_dim, 1, 1 ,1, 77, 154, 154, 512, 512, 512, 512, 512, 512)
