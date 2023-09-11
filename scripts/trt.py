@@ -8,6 +8,8 @@ import torch
 from modules import script_callbacks, sd_unet, devices, shared, paths_internal
 
 import ui_trt
+from utilities import Engine
+from exporter import get_cc
 
 class TrtUnetOption(sd_unet.SdUnetOption):
     def __init__(self, filename, name):
@@ -17,15 +19,6 @@ class TrtUnetOption(sd_unet.SdUnetOption):
 
     def create_unet(self):
         return TrtUnet(self.filename)
-
-
-np_to_torch = {
-    np.float32: torch.float32,
-    np.float16: torch.float16,
-    np.int8: torch.int8,
-    np.uint8: torch.uint8,
-    np.int32: torch.int32,
-}
 
 
 class TrtUnet(sd_unet.SdUnet):
@@ -39,88 +32,65 @@ class TrtUnet(sd_unet.SdUnet):
         self.nptype = None
         self.cuda_graph_instance = None
 
-    def allocate_buffers(self, feed_dict):
-        buffers_shape = sum([x.shape for x in feed_dict.values()], ())
-        if self.buffers_shape == buffers_shape:
-            return
-        # elif self.buffers != None: # does not adapt to dynamic shapes & wrong initial input
-        #     raise RuntimeError(f"Tensor shape does not match: {self.buffers_shape} expected, got {buffers_shape}. Are the input dimensions supported by selected engine?")
-
-        self.buffers_shape = buffers_shape
-        self.buffers = {}
-
-        from tensorrt import Dims
-        for binding in self.trtcontext.engine:
-            binding_idx = self.trtcontext.engine.get_binding_index(binding)
-            dtype = self.nptype(self.trtcontext.engine.get_binding_dtype(binding))
-
-            if binding in feed_dict:
-                shape = Dims(feed_dict[binding].shape)
-            else:
-                shape = self.trtcontext.get_binding_shape(binding_idx)
-
-            if self.trtcontext.engine.binding_is_input(binding):
-                if not self.trtcontext.set_binding_shape(binding_idx, shape): # return value might be borked
-                    print(f'bad shape for TensorRT input {binding}: {tuple(shape)}')
-
-            tensor = torch.empty(tuple(shape), dtype=np_to_torch[dtype], device=devices.device)
-            self.buffers[binding] = tensor
-
-    def infer(self, feed_dict):
-        self.allocate_buffers(feed_dict)
-
-        for name, tensor in feed_dict.items():
-            self.buffers[name].copy_(tensor)
-
-
-        for name, tensor in self.buffers.items():
-            self.trtcontext.set_tensor_address(name, tensor.data_ptr())
-
-        self.trtcontext.execute_async_v3(self.cudaStream)
+        self.engine = None
+        self.stream = None
+        self.controlnet = None
+        
+        self.cc_major, self.cc_minor = get_cc()
+        self.active = False
+        
+    def get_shape_dict(self, batch_size, unet_dim, latent_height, latent_width, text_maxlen, embedding_dim, image_height=None, image_width=None):
+        if self.controlnet is None:
+            return {
+                'sample': (batch_size, unet_dim, latent_height, latent_width),
+                'encoder_hidden_states': (batch_size, text_maxlen, embedding_dim),
+                'latent': (batch_size, 4, latent_height, latent_width)
+            }
+        else:
+            return {
+                'sample': (batch_size, unet_dim, latent_height, latent_width),
+                'encoder_hidden_states': (batch_size, text_maxlen, embedding_dim),
+                'images': (len(self.controlnet), batch_size, 3, image_height, image_width), 
+                'latent': (batch_size, 4, latent_height, latent_width)
+            }
 
     def forward(self, x, timesteps, context, *args, **kwargs):
-        tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
-        self.trtcontext.device_memory = tmp.data_ptr()
-        self.cudaStream = torch.cuda.current_stream(device=tmp.device).cuda_stream
+        feed_dict = {
+            "sample": x,
+            "timestep": timesteps[:1].clone(),
+            "encoder_hidden_states": context,
+        }
 
-        self.infer({"x": x, "timesteps": timesteps, "context": context})
+        # tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
+        # self.engine.context.device_memory = tmp.data_ptr()
+        self.cudaStream = torch.cuda.current_stream().cuda_stream
+        self.engine.allocate_buffers(feed_dict)
 
-        return self.buffers["output"].to(dtype=x.dtype, device=devices.device)
+        out = self.engine.infer(feed_dict, self.cudaStream)["latent"]
+        return out
 
     def activate(self):
-        import tensorrt as trt  # we import this late because it breaks torch onnx export
-
-        TRT_LOGGER = trt.Logger(trt.ILogger.Severity.VERBOSE)
-        trt.init_libnvinfer_plugins(None, "")
-        self.nptype = trt.nptype
-        # torch.cuda.set_device(devices.device)
-        with open(self.filename, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
-            engine = runtime.deserialize_cuda_engine(f.read())
-            self.engine_vram_req = engine.device_memory_size
-            self.trtcontext = engine.create_execution_context_without_device_memory()
-
-
-        assert(self.trtcontext is not None)
+        self.engine = Engine(self.filename)
+        self.engine.load()
+        print(self.engine)
+        self.engine_vram_req = self.engine.engine.device_memory_size
+        self.engine.activate(False)
 
     def deactivate(self):
-        self.engine = None
-        self.trtcontext = None
-        self.buffers = None
-        self.buffers_shape = ()
-        devices.torch_gc()
+        del self.engine
 
+TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
 
 def list_unets(l):
-
-    trt_dir = os.path.join(paths_internal.models_path, 'Unet-trt')
-    candidates = list(shared.walk_files(trt_dir, allowed_extensions=[".trt"]))
-    for filename in sorted(candidates, key=str.lower):
-        name = os.path.splitext(os.path.basename(filename))[0]
-
-        opt = TrtUnetOption(filename, name)
-        l.append(opt)
-
+    def strip_trt(s):
+        return "_".join(s.split("_")[:-2])
+    a, b = get_cc()
+    trt_models = [m for m in sorted(os.listdir(TRT_MODEL_DIR)) if not "timing_cache" in m]
+    model_names = [strip_trt(m) for m in trt_models]
+    for p, name in zip(trt_models, model_names):
+        if f"_cc{a}{b}" not in p:
+            continue
+        l.append(TrtUnetOption(os.path.join(TRT_MODEL_DIR, p), name))
 
 script_callbacks.on_list_unets(list_unets)
-
 script_callbacks.on_ui_tabs(ui_trt.on_ui_tabs)

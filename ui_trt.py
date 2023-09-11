@@ -5,153 +5,171 @@ import launch
 from modules import script_callbacks, paths_internal, shared
 import gradio as gr
 
-import export_onnx
-import export_trt
 from modules.call_queue import wrap_gradio_gpu_call
 from modules.shared import cmd_opts
 from modules.ui_components import FormRow
 
+from exporter import export_onnx, export_trt, get_cc
+from utilities import PIPELINE_TYPE
+from models import make_UNet, make_UNetXL
+from logging import info
+import logging
+from dataclasses import dataclass
+
+
+logging.basicConfig(level=logging.INFO)
 
 ONNX_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-onnx")
 if not os.path.exists(ONNX_MODEL_DIR):
-    os.mkdir(ONNX_MODEL_DIR)
-    
-ONNX_MODELS = [ os.path.join(ONNX_MODEL_DIR, f"{m}") for m in os.listdir(ONNX_MODEL_DIR)]
-    
-                
+    os.makedirs(ONNX_MODEL_DIR)
+
+TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
+if not os.path.exists(TRT_MODEL_DIR):
+    os.makedirs(TRT_MODEL_DIR)
+
+ONNX_MODELS = [os.path.join(ONNX_MODEL_DIR, f"{m}") for m in sorted(os.listdir(ONNX_MODEL_DIR))]
+TRT_MODELS = [os.path.join(TRT_MODEL_DIR, f"{m}") for m in sorted(os.listdir(TRT_MODEL_DIR))]
+
 def load_onnx_list(): 
-    ONNX_MODELS = [ os.path.join(ONNX_MODEL_DIR, f"{m}") for m in os.listdir(ONNX_MODEL_DIR)]
+    ONNX_MODELS = [ os.path.join(ONNX_MODEL_DIR, f"{m}") for m in sorted(os.listdir(ONNX_MODEL_DIR))]
     return gr.Dropdown.update(choices=ONNX_MODELS)
 
-def export_unet_to_onnx(filename, opset):
-    if not filename:
-        modelname = shared.sd_model.sd_checkpoint_info.model_name + ".onnx"
-        filename = os.path.join(paths_internal.models_path, "Unet-onnx", modelname)
+def get_trt_list():
+    def strip_trt(s):
+        return "_".join(s.split("_")[:-2])
+    TRT_MODELS = [strip_trt(m) for m in TRT_MODELS]
+    return gr.Dropdown.update(choices=TRT_MODELS)
 
 
-    export_onnx.export_current_unet_to_onnx(filename, opset)
-
-    return f'Saved as {filename}', ''
-
-
-def get_trt_filename(filename, onnx_filename):
-    if filename:
-        return filename
-
-    return os.path.join(paths_internal.models_path, "Unet-trt", "")
-
-
-
-def convert_onnx_to_trt(filename, onnx_filename, *args):
-    assert not cmd_opts.disable_extension_access, "won't run the command to create TensorRT file because extension access is dsabled (use --enable-insecure-extension-access)"
-    filename = get_trt_filename(filename, onnx_filename)
-    export_trt.generate_trt_engine(filename, onnx_filename, *args)
+def get_version_from_model(sd_model):
+    if sd_model.is_sd1:
+        return "1.5"
+    if sd_model.is_sd2:
+        return "2.1"
+    if sd_model.is_sdxl:
+        return "xl-1.0"
     
-    return f'Saved as {filename}', ''
+@dataclass
+class TRTHash:
+    trt_max_batch: int
+    trt_width: int
+    trt_height: int
+    trt_token_count: int
+    use_fp32: bool
+    is_inpaint: bool
 
-def convert_onnx_to_trt_preset(filename, onnx_filename, *args):
-    assert not cmd_opts.disable_extension_access, "won't run the command to create TensorRT file because extension access is dsabled (use --enable-insecure-extension-access)"
-    filename = get_trt_filename(filename, onnx_filename)
-    export_trt.generate_trt_engine_presets(filename, onnx_filename, *args)
-    return f'Saved as {filename}', ''
+    def hash(self) -> int:
+        # TODO due to cahnge in final version
+        return hex(hash((self.trt_max_batch, self.trt_width, self.trt_height, self.trt_token_count, self.use_fp32, self.is_inpaint)))
 
+def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint, force_export):
+    model_hash = shared.sd_model.sd_checkpoint_info.hash
+    model_name = shared.sd_model.sd_checkpoint_info.model_name
+    cc_major, cc_minor = get_cc()
 
+    trt_max_batch = 1 # TODO
+    is_inpaint = False
 
+    trt_option_hash = TRTHash(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint).hash()
 
+    if cc_major < 7:
+        use_fp32 = True
+        info("Disabling FP16 because your GPU does not support it.")
+    
+    onnx_filename = "_".join([model_name, model_hash]) + ".onnx"
+    onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
 
+    trt_engine_filename = "_".join([model_name, model_hash, f"cc{cc_major}{cc_minor}", trt_option_hash]) + ".trt"
+    trt_path = os.path.join(TRT_MODEL_DIR, trt_engine_filename)
+    timing_cache = os.path.join(TRT_MODEL_DIR, f"timing_cache_cc{cc_major}{cc_minor}.trt") # TODO try to source from remote
+
+    version = get_version_from_model(shared.sd_model)
+
+    pipeline = PIPELINE_TYPE.TXT2IMG
+    if is_inpaint:
+        pipeline = PIPELINE_TYPE.INPAINT
+    controlnet = None # TODO Controlnet
+
+    n_tokens = (trt_token_count // 75)
+
+    if shared.sd_model.is_sdxl:
+        pipeline = PIPELINE_TYPE.SD_XL_BASE
+        modelobj = make_UNetXL(version, pipeline, None, "cuda", False, trt_max_batch)
+    else:
+        modelobj = make_UNet(version, pipeline, None, "cuda", False, trt_max_batch, controlnet)
+    
+    if not os.path.exists(onnx_path):
+        info("No ONNX file found. Exporting...")
+        export_onnx(onnx_path, modelobj, profile=modelobj.get_input_profile(1, trt_width, trt_height, False, False))
+        info("Exported to ONNX.")
+
+    if not os.path.exists(trt_path) or force_export: # TODO longer token sequences
+        info("No TensorRT file found. Building...")
+        static_batch = False
+        if trt_max_batch == 1:
+            static_batch = True
+        export_trt(trt_path, onnx_path, timing_cache, profile=modelobj.get_input_profile(1, trt_width, trt_height, static_batch, False), use_fp16=not use_fp32)
+        info("Built TensorRT file.")
+    else:
+        info("TensorRT file found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild.")
+
+    f'Saved as {trt_path}', ''
+
+    
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
-        with gr.Row().style(equal_height=False):
+        with gr.Row().style(equal_height=True):
             with gr.Column(variant='panel'):
                 with gr.Tabs(elem_id="trt_tabs"):
-                    with gr.Tab(label="Convert to ONNX"):
-                        gr.HTML(value="<p style='margin-bottom: 0.7em'>Convert currently loaded checkpoint into ONNX. The conversion will fail catastrophically if TensorRT was used at any point prior to conversion, so you might have to restart webui before doing the conversion.</p>")
+                    with gr.Tab(label="Convert to TRT"):
+                        gr.HTML(value="<p style='margin-bottom: 0.7em'>Convert currently loaded checkpoint into TensorRT.</p>")
                         
-
-                        onnx_filename = gr.Textbox(label='Filename', value="", elem_id="onnx_filename", info="Leave empty to use the same name as model and put results into models/Unet-onnx directory")
-                        onnx_opset = gr.Number(label='ONNX opset version', precision=0, value=17, info="Leave this alone unless you know what you are doing")
-
-                        button_export_unet = gr.Button(value="Convert Unet to ONNX", variant='primary', elem_id="onnx_export_unet")
-
-                    with gr.Tab(label="Convert ONNX to TensorRT (Preset configs)"):
-                        gr.HTML(value="<p style='margin-bottom: 0.7em'>Set configuration to true to build multiple TensorRT engines. (Warning build time increases per selected preset)</p>")
-                        
-                        with gr.Column(variant="compact"):
-                            trt_source_filename_preset = gr.Dropdown(ONNX_MODELS, label="ONNX Model", info="Select an Onnx model to convert to TensorRT. Found in models/Unet-onnx")
-                            refresh_onnx_db = gr.Button("Refresh List.")
-                        trt_filename = gr.Textbox(label='Output filename', value="", elem_id="trt_filename", info="Leave empty to use the same name as onnx and put results into models/Unet-trt directory", visible=False)
-                        
-                        with gr.Row():
-                            
-                            with gr.Column(label="Presets 512x512"):
-                                profile_512x512x1 = gr.Checkbox(label='512x512x1', value=False, elem_id="512x512x1")
-                                profile_512x512x2 = gr.Checkbox(label='512x512x2', value=False, elem_id="512x512x2")
-                                profile_512x512x4 = gr.Checkbox(label='512x512x4', value=False, elem_id="512x512x4")
-                                
-                            with gr.Column(label="Presets 768x768"):
-                                profile_768x768x1 = gr.Checkbox(label='768x768x1', value=False, elem_id="768x768x1")
-                                profile_768x768x2 = gr.Checkbox(label='768x768x2', value=False, elem_id="768x768x2")
-                                profile_768x768x4 = gr.Checkbox(label='768x768x4', value=False, elem_id="768x768x4")
-
-                        use_fp16 = gr.Checkbox(label='FP16', value=True, elem_id="trt_fp16")
-                        button_export_preset_trt = gr.Button(value="Convert ONNX to TensorRT", variant='primary', elem_id="button_export_preset_trt")
-
-
-                    with gr.Tab(label="Convert ONNX to TensorRT (Custom)"):
-                        trt_source_filename = gr.Textbox(label='Onnx model filename', value="", elem_id="trt_source_filename")
-                        trt_filename = gr.Textbox(label='Output filename', value="", elem_id="trt_filename", info="Leave empty to use the same name as onnx and put results into models/Unet-trt directory")
-
-                        with gr.Column(elem_id="trt_width"):
-                            min_width = gr.Slider(minimum=64, maximum=2048, step=64, label="Minimum width", value=512, elem_id="trt_min_width")
-                            opt_width = gr.Slider(minimum=64, maximum=2048, step=64, label="Optimal width", value=512, elem_id="trt_opt_width")
-                            max_width = gr.Slider(minimum=64, maximum=2048, step=64, label="Maximum width", value=512, elem_id="trt_max_width")
-
-                        with gr.Column(elem_id="trt_height"):
-                            min_height = gr.Slider(minimum=64, maximum=2048, step=64, label="Minimum height", value=512, elem_id="trt_min_height")
-                            opt_height = gr.Slider(minimum=64, maximum=2048, step=64, label="Optimal height", value=512, elem_id="trt_opt_height")
-                            max_height = gr.Slider(minimum=64, maximum=2048, step=64, label="Maximum height", value=512, elem_id="trt_max_height")
-
-                        with gr.Column(elem_id="trt_batch_size"):
-                            min_bs = gr.Slider(minimum=1, maximum=16, step=1, label="Minimum batch size", value=1, elem_id="trt_min_bs")
-                            opt_bs = gr.Slider(minimum=1, maximum=16, step=1, label="Optimal batch size", value=1, elem_id="trt_opt_bs")
-                            max_bs = gr.Slider(minimum=1, maximum=16, step=1, label="Maximum batch size", value=1, elem_id="trt_max_bs")
-
-                        with gr.Column(elem_id="trt_token_count"):
-                            min_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Minimum prompt token count", value=75, elem_id="trt_min_token_count")
-                            opt_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Optimal prompt token count", value=75, elem_id="trt_opt_token_count")
-                            max_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Maximum prompt token count", value=75, elem_id="trt_max_token_count")
-
-                        trt_extra_args = gr.Textbox(label='Extra arguments', value="", elem_id="trt_extra_args", info="Extra arguments for trtexec command in plain text form")
+                        with FormRow(elem_classes="checkboxes-row", variant="compact"):
+                            is_inpaint = gr.Checkbox(label='Is inpainting Model.', value=False, elem_id="trt_inpaint")
 
                         with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                            use_fp16 = gr.Checkbox(label='Use half floats', value=True, elem_id="trt_fp16")
+                            is_controlnet = gr.Checkbox(label='Is ControlNet Model.', value=False, elem_id="trt_controlnet")
+                        
+                        with gr.Accordion("Expert Settings", open=False):
+                            with gr.Column(elem_id="trt_width"):
+                                trt_width = gr.Slider(minimum=256, maximum=2048, step=64, label="Optimal width", value=512, elem_id="trt_opt_width")
 
-                        button_export_trt = gr.Button(value="Convert ONNX to TensorRT", variant='primary', elem_id="trt_convert_from_onnx")
+                            with gr.Column(elem_id="trt_height"):
+                                trt_height = gr.Slider(minimum=256, maximum=2048, step=64, label="Optimal height", value=512, elem_id="trt_opt_height")
 
+                            with gr.Column(elem_id="trt_max_batch"):
+                                trt_max_batch = gr.Slider(minimum=1, maximum=1, step=1, label="Largest batch-size allowed", value=1, elem_id="trt_max_batch") #TODO
+
+                            with gr.Column(elem_id="trt_token_count"):
+                                trt_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Optimal prompt token count", value=75, elem_id="trt_opt_token_count")
+
+                            with FormRow(elem_classes="checkboxes-row", variant="compact"):
+                                use_fp32 = gr.Checkbox(label='FP32', value=False, elem_id="trt_fp32")
+
+                            with FormRow(elem_classes="checkboxes-row", variant="compact"):
+                                force_rebuild = gr.Checkbox(label='Force Rebuild.', value=False, elem_id="trt_force_rebuild")
+
+                        button_export_unet = gr.Button(value="Convert Unet to TensorRT", variant='primary', elem_id="trt_export_unet", style="color: #76B900; background-color: #76B900;")
+                      
             with gr.Column(variant='panel'):
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "info.md"), "r") as f:                    
+                    trt_info = gr.Markdown(elem_id="trt_info", value=f.read())
+
+        with gr.Row().style(equal_height=False):
+            with gr.Accordion("Output", open=False):
                 trt_result = gr.Label(elem_id="trt_result", value="", show_label=False)
                 trt_info = gr.HTML(elem_id="trt_info", value="")
 
-
-        refresh_onnx_db.click(load_onnx_list,
-                              outputs=trt_source_filename_preset)
         button_export_unet.click(
-            wrap_gradio_gpu_call(export_unet_to_onnx, extra_outputs=["Conversion failed"]),
-            inputs=[onnx_filename, onnx_opset],
+            wrap_gradio_gpu_call(export_unet_to_trt, extra_outputs=["Conversion failed"]),
+            inputs=[trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint, force_rebuild],
             outputs=[trt_result, trt_info],
         )
 
-        button_export_preset_trt.click(
-            wrap_gradio_gpu_call(convert_onnx_to_trt_preset, extra_outputs=[""]),
-            inputs=[trt_filename, trt_source_filename_preset, profile_512x512x1, profile_512x512x2, profile_512x512x4, profile_768x768x1,profile_768x768x2, profile_768x768x4, use_fp16],
-            outputs=[trt_result, trt_info],      
-        )
- 
-        button_export_trt.click(
-            wrap_gradio_gpu_call(convert_onnx_to_trt, extra_outputs=[""]),
-            inputs=[trt_filename, trt_source_filename, min_bs, opt_bs, max_bs, min_token_count, opt_token_count, max_token_count, min_width, opt_width, max_width, min_height, opt_height, max_height, use_fp16, trt_extra_args],
-            outputs=[trt_result, trt_info],
-        )
+        # button_list_unet.click(
+        #     get_trt_list, outputs=trt_source_filename_preset
+        # ) #TODO
+
 
     return [(trt_interface, "TensorRT", "tensorrt")]
 
