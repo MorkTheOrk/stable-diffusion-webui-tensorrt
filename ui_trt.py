@@ -11,7 +11,7 @@ from modules.ui_components import FormRow
 
 from exporter import export_onnx, export_trt, get_cc
 from utilities import PIPELINE_TYPE
-from models import make_UNet, make_UNetXL
+from models import make_UNet, make_UNetXL, make_OAIUNet
 from logging import info
 import logging
 from dataclasses import dataclass
@@ -62,12 +62,11 @@ class TRTHash:
         # TODO due to cahnge in final version
         return hex(hash((self.trt_max_batch, self.trt_width, self.trt_height, self.trt_token_count, self.use_fp32, self.is_inpaint)))
 
-def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint, force_export):
+def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, force_export):
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     cc_major, cc_minor = get_cc()
 
-    trt_max_batch = 1 # TODO
     is_inpaint = False
 
     trt_option_hash = TRTHash(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint).hash()
@@ -90,20 +89,22 @@ def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, us
         pipeline = PIPELINE_TYPE.INPAINT
     controlnet = None # TODO Controlnet
 
-    n_tokens = (trt_token_count // 75)
+    opt_textlen = 77
+    max_textlen = (trt_token_count // 75)*77
 
     if shared.sd_model.is_sdxl:
         pipeline = PIPELINE_TYPE.SD_XL_BASE
         modelobj = make_UNetXL(version, pipeline, None, "cuda", False, trt_max_batch)
     else:
-        modelobj = make_UNet(version, pipeline, None, "cuda", False, trt_max_batch, controlnet)
+        # modelobj = make_UNet(version, pipeline, None, "cuda", False, trt_max_batch, controlnet)
+        modelobj = make_OAIUNet(version, pipeline, "cuda", False, trt_max_batch, opt_textlen, max_textlen, controlnet)
     
     if not os.path.exists(onnx_path):
         info("No ONNX file found. Exporting...")
-        export_onnx(onnx_path, modelobj, profile=modelobj.get_input_profile(1, trt_width, trt_height, False, False))
+        export_onnx(onnx_path, modelobj, profile=modelobj.get_input_profile(1, trt_width, trt_height, False, False), is_xl=shared.sd_model.is_sdxl)
         info("Exported to ONNX.")
 
-    if not os.path.exists(trt_path) or force_export: # TODO longer token sequences
+    if not os.path.exists(trt_path) or force_export:
         info("No TensorRT file found. Building...")
         static_batch = False
         if trt_max_batch == 1:
@@ -115,6 +116,22 @@ def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, us
 
     f'Saved as {trt_path}', ''
 
+def get_settings_from_version(version):
+    if version == "1.x":
+        return 1, 512, 512
+    elif version == "2.x":
+        return 1, 768, 768
+    elif version == "XL Base":
+        return 1, 1024, 1024
+    else:
+        return 1, 512, 512
+    
+def diable_button(version):
+    if version is None:
+        return gr.update(visible=False)
+    else:
+        return gr.update(visible=True)
+
     
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
@@ -123,9 +140,8 @@ def on_ui_tabs():
                 with gr.Tabs(elem_id="trt_tabs"):
                     with gr.Tab(label="Convert to TRT"):
                         gr.HTML(value="<p style='margin-bottom: 0.7em'>Convert currently loaded checkpoint into TensorRT.</p>")
-                        
-                        with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                            is_inpaint = gr.Checkbox(label='Is inpainting Model.', value=False, elem_id="trt_inpaint")
+
+                        version = gr.Dropdown(label="Stable Diffusion Version", choices=["1.x", "2.x", "XL Base"], elem_id="sd_version", default=None)
 
                         with FormRow(elem_classes="checkboxes-row", variant="compact"):
                             is_controlnet = gr.Checkbox(label='Is ControlNet Model.', value=False, elem_id="trt_controlnet")
@@ -138,10 +154,10 @@ def on_ui_tabs():
                                 trt_height = gr.Slider(minimum=256, maximum=2048, step=64, label="Optimal height", value=512, elem_id="trt_opt_height")
 
                             with gr.Column(elem_id="trt_max_batch"):
-                                trt_max_batch = gr.Slider(minimum=1, maximum=1, step=1, label="Largest batch-size allowed", value=1, elem_id="trt_max_batch") #TODO
+                                trt_max_batch = gr.Slider(minimum=1, maximum=4, step=1, label="Largest batch-size allowed", value=1, elem_id="trt_max_batch")
 
                             with gr.Column(elem_id="trt_token_count"):
-                                trt_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Optimal prompt token count", value=75, elem_id="trt_opt_token_count")
+                                trt_token_count = gr.Slider(minimum=75, maximum=750, step=75, label="Max prompt token count", value=150, elem_id="trt_opt_token_count")
 
                             with FormRow(elem_classes="checkboxes-row", variant="compact"):
                                 use_fp32 = gr.Checkbox(label='FP32', value=False, elem_id="trt_fp32")
@@ -149,7 +165,10 @@ def on_ui_tabs():
                             with FormRow(elem_classes="checkboxes-row", variant="compact"):
                                 force_rebuild = gr.Checkbox(label='Force Rebuild.', value=False, elem_id="trt_force_rebuild")
 
-                        button_export_unet = gr.Button(value="Convert Unet to TensorRT", variant='primary', elem_id="trt_export_unet", style="color: #76B900; background-color: #76B900;")
+                        button_export_unet = gr.Button(value="Convert Unet to TensorRT", variant='primary', elem_id="trt_export_unet", visible=False)
+
+                        version.change(get_settings_from_version, version, [trt_max_batch, trt_width, trt_height])
+                        version.change(diable_button, version, button_export_unet)
                       
             with gr.Column(variant='panel'):
                 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "info.md"), "r") as f:                    
@@ -162,7 +181,7 @@ def on_ui_tabs():
 
         button_export_unet.click(
             wrap_gradio_gpu_call(export_unet_to_trt, extra_outputs=["Conversion failed"]),
-            inputs=[trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint, force_rebuild],
+            inputs=[trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, force_rebuild],
             outputs=[trt_result, trt_info],
         )
 

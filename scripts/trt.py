@@ -38,27 +38,12 @@ class TrtUnet(sd_unet.SdUnet):
         
         self.cc_major, self.cc_minor = get_cc()
         self.active = False
-        
-    def get_shape_dict(self, batch_size, unet_dim, latent_height, latent_width, text_maxlen, embedding_dim, image_height=None, image_width=None):
-        if self.controlnet is None:
-            return {
-                'sample': (batch_size, unet_dim, latent_height, latent_width),
-                'encoder_hidden_states': (batch_size, text_maxlen, embedding_dim),
-                'latent': (batch_size, 4, latent_height, latent_width)
-            }
-        else:
-            return {
-                'sample': (batch_size, unet_dim, latent_height, latent_width),
-                'encoder_hidden_states': (batch_size, text_maxlen, embedding_dim),
-                'images': (len(self.controlnet), batch_size, 3, image_height, image_width), 
-                'latent': (batch_size, 4, latent_height, latent_width)
-            }
 
     def forward(self, x, timesteps, context, *args, **kwargs):
         feed_dict = {
             "sample": x,
-            "timestep": timesteps[:1].clone(),
-            "encoder_hidden_states": context,
+            "timesteps": timesteps,
+            "encoder_hidden_states": context, # TODO kwargs for SDXL
         }
 
         # tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
