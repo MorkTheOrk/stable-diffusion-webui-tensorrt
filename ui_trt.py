@@ -30,6 +30,8 @@ if not os.path.exists(TRT_MODEL_DIR):
 ONNX_MODELS = [os.path.join(ONNX_MODEL_DIR, f"{m}") for m in sorted(os.listdir(ONNX_MODEL_DIR))]
 TRT_MODELS = [os.path.join(TRT_MODEL_DIR, f"{m}") for m in sorted(os.listdir(TRT_MODEL_DIR))]
 
+NVIDIA_CACHE_URL = "https://"  
+
 def load_onnx_list(): 
     ONNX_MODELS = [ os.path.join(ONNX_MODEL_DIR, f"{m}") for m in sorted(os.listdir(ONNX_MODEL_DIR))]
     return gr.Dropdown.update(choices=ONNX_MODELS)
@@ -61,6 +63,21 @@ class TRTHash:
     def hash(self) -> int:
         # TODO due to cahnge in final version
         return hex(hash((self.trt_max_batch, self.trt_width, self.trt_height, self.trt_token_count, self.use_fp32, self.is_inpaint)))
+      
+def get_trt_cache(cc_maj, cc_min, enable_remote=False, force_download=False): # feature disabled  
+    cache_name = f"timing_cache_cc{cc_maj}{cc_min}.cache"
+    cache_path = os.path.join(TRT_MODEL_DIR, cache_name)
+    if not os.path.isfile(cache_path) and enable_remote or force_download: 
+        import requests
+        download_url = f"{NVIDIA_CACHE_URL}/{cache_name}"
+        r = requests.get(url=download_url)
+        if r.ok:
+            open(cache_path, 'wb').write(r.content)
+            return cache_path
+        else:
+            raise RuntimeWarning("Warning! Could not download remote cache file, falling back.(Status Code {r.status_code})")
+    else :
+        return cache_path 
 
 def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, use_fp32, is_inpaint, force_export):
     model_hash = shared.sd_model.sd_checkpoint_info.hash
@@ -81,7 +98,7 @@ def export_unet_to_trt(trt_max_batch, trt_width, trt_height, trt_token_count, us
 
     trt_engine_filename = "_".join([model_name, model_hash, f"cc{cc_major}{cc_minor}", trt_option_hash]) + ".trt"
     trt_path = os.path.join(TRT_MODEL_DIR, trt_engine_filename)
-    timing_cache = os.path.join(TRT_MODEL_DIR, f"timing_cache_cc{cc_major}{cc_minor}.trt") # TODO try to source from remote
+    timing_cache = get_trt_cache(cc_major, cc_minor) # TODO try to source from remote
 
     version = get_version_from_model(shared.sd_model)
 
