@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass
 import gc
 import torch
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 
@@ -231,7 +232,7 @@ def export_unet_to_trt(
         trt_token_count_max=token_count_max if not static_shapes else token_count_opt,
         use_fp32=use_fp32,
         is_static_shape=static_shapes,
-        unet_hidden_dim=shared.sd_model.model.diffusion_model.in_channels
+        unet_hidden_dim=shared.sd_model.model.diffusion_model.in_channels,
     )
     trt_option_hash = trt_settings.hash()
 
@@ -341,6 +342,40 @@ def diable_visibility(hide):
     return out
 
 
+def get_available_trt_unet():
+    a, b = get_cc()
+    model = defaultdict(list)
+    for p in os.listdir(TRT_MODEL_DIR):
+        base_model = "_".join(p.split("_")[:-2])
+        if f"_cc{a}{b}" not in p:
+            continue
+        if not p.endswith(".trt"):
+            continue
+        model[base_model].append(os.path.join(TRT_MODEL_DIR, p))
+    return model
+
+
+def engine_profile_card():
+    models = get_available_trt_unet()
+    out_string = "## Available TensorRT Models \n"
+    for k, v in models.items():
+        markdown_string = f"### Model: {k} \n"
+        for i, p in enumerate(v):
+            profile = TRTSettings.from_hash(p)
+            markdown_string += f"#### Profile {i} \n"
+            markdown_string += f" - **Opt:** {profile.trt_batch_opt}x{profile.trt_height_opt}x{profile.trt_width_opt}x{profile.trt_token_count_opt} \n"
+            if profile.is_static_shape:
+                continue
+            else:
+                min_max = f" - **Min:** {profile.trt_batch_min}x{profile.trt_height_min}x{profile.trt_width_min}x{profile.trt_token_count_min} \n - **Max:** {profile.trt_batch_max}x{profile.trt_height_max}x{profile.trt_width_max}x{profile.trt_token_count_max} \n"
+                markdown_string += min_max
+            markdown_string += "\n"
+        out_string += markdown_string
+        out_string += "\n --- \n"
+    # print(out_string)
+    return out_string
+
+
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
         with gr.Row(equal_height=True):
@@ -364,9 +399,7 @@ def on_ui_tabs():
                     )
 
                 with gr.Accordion("Advanced Settings", open=False):
-                    with FormRow(
-                        elem_classes="checkboxes-row", variant="compact"
-                    ):
+                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
                         static_shapes = gr.Checkbox(
                             label="Use static shapes.",
                             value=False,
@@ -477,16 +510,12 @@ def on_ui_tabs():
                             elem_id="trt_opt_token_count_max",
                         )
 
-                    with FormRow(
-                        elem_classes="checkboxes-row", variant="compact"
-                    ):
+                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
                         use_fp32 = gr.Checkbox(
                             label="FP32", value=False, elem_id="trt_fp32"
                         )
 
-                    with FormRow(
-                        elem_classes="checkboxes-row", variant="compact"
-                    ):
+                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
                         force_rebuild = gr.Checkbox(
                             label="Force Rebuild.",
                             value=False,
@@ -545,6 +574,9 @@ def on_ui_tabs():
             with gr.Accordion("Output", open=False):
                 trt_result = gr.Label(elem_id="trt_result", value="", show_label=False)
                 trt_info = gr.HTML(elem_id="trt_info", value="")
+
+        with gr.Row(equal_height=False):
+            trt_available_models = gr.Markdown(elem_id="trt_available_models", value=engine_profile_card())
 
         button_export_unet.click(
             wrap_gradio_gpu_call(

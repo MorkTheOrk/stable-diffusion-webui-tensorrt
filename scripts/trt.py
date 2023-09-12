@@ -10,9 +10,8 @@ from modules import script_callbacks, sd_unet, devices, shared, paths_internal
 import ui_trt
 from utilities import Engine
 from exporter import get_cc
-from collections import defaultdict
 from typing import List
-from ui_trt import TRTSettings
+from ui_trt import TRTSettings, get_available_trt_unet
 
 
 class TrtUnetOption(sd_unet.SdUnetOption):
@@ -91,22 +90,8 @@ class TrtUnet(sd_unet.SdUnet):
 
 TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
 
-
-def get_trt_unet():
-    a, b = get_cc()
-    model = defaultdict(list)
-    for p in os.listdir(TRT_MODEL_DIR):
-        base_model = "_".join(p.split("_")[:-2])
-        if f"_cc{a}{b}" not in p:
-            continue
-        if not p.endswith(".trt"):
-            continue
-        model[base_model].append(os.path.join(TRT_MODEL_DIR, p))
-    return model
-
-
 def list_unets(l):
-    model = get_trt_unet()
+    model = get_available_trt_unet()
     for k, v in model.items():
         l.append(TrtUnetOption(k, v))
 
