@@ -22,7 +22,12 @@ import onnx
 import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
 from polygraphy.backend.trt import CreateConfig, ModifyNetworkOutputs, Profile
-from polygraphy.backend.trt import engine_from_bytes, engine_from_network, network_from_onnx_path, save_engine
+from polygraphy.backend.trt import (
+    engine_from_bytes,
+    engine_from_network,
+    network_from_onnx_path,
+    save_engine,
+)
 import tensorrt as trt
 import torch
 from enum import Enum, auto
@@ -31,16 +36,16 @@ TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
 # Map of numpy dtype -> torch dtype
 numpy_to_torch_dtype_dict = {
-    np.uint8      : torch.uint8,
-    np.int8       : torch.int8,
-    np.int16      : torch.int16,
-    np.int32      : torch.int32,
-    np.int64      : torch.int64,
-    np.float16    : torch.float16,
-    np.float32    : torch.float32,
-    np.float64    : torch.float64,
-    np.complex64  : torch.complex64,
-    np.complex128 : torch.complex128
+    np.uint8: torch.uint8,
+    np.int8: torch.int8,
+    np.int16: torch.int16,
+    np.int32: torch.int32,
+    np.int64: torch.int64,
+    np.float16: torch.float16,
+    np.float32: torch.float32,
+    np.float64: torch.float64,
+    np.complex64: torch.complex64,
+    np.complex128: torch.complex128,
 }
 if np.version.full_version >= "1.24.0":
     numpy_to_torch_dtype_dict[np.bool_] = torch.bool
@@ -48,7 +53,10 @@ else:
     numpy_to_torch_dtype_dict[np.bool] = torch.bool
 
 # Map of torch dtype -> numpy dtype
-torch_to_numpy_dtype_dict = {value : key for (key, value) in numpy_to_torch_dtype_dict.items()}
+torch_to_numpy_dtype_dict = {
+    value: key for (key, value) in numpy_to_torch_dtype_dict.items()
+}
+
 
 class PIPELINE_TYPE(Enum):
     TXT2IMG = auto()
@@ -75,7 +83,8 @@ class PIPELINE_TYPE(Enum):
     def is_sd_xl(self):
         return self.is_sd_xl_base() or self.is_sd_xl_refiner()
 
-class Engine():
+
+class Engine:
     def __init__(
         self,
         engine_path,
@@ -85,7 +94,7 @@ class Engine():
         self.context = None
         self.buffers = OrderedDict()
         self.tensors = OrderedDict()
-        self.cuda_graph_instance = None # cuda graph
+        self.cuda_graph_instance = None  # cuda graph
 
     def __del__(self):
         del self.engine
@@ -121,14 +130,15 @@ class Engine():
             # Handle scale and bias weights
             elif node.op == "Conv":
                 if node.inputs[1].__class__ == gs.Constant:
-                    name_map[refit_node.name+"_TRTKERNEL"] = node.name+"_TRTKERNEL"
+                    name_map[refit_node.name + "_TRTKERNEL"] = node.name + "_TRTKERNEL"
                 if node.inputs[2].__class__ == gs.Constant:
-                    name_map[refit_node.name+"_TRTBIAS"] = node.name+"_TRTBIAS"
+                    name_map[refit_node.name + "_TRTBIAS"] = node.name + "_TRTBIAS"
             # For all other nodes: find node inputs that are initializers (gs.Constant)
             else:
                 for i, inp in enumerate(node.inputs):
                     if inp.__class__ == gs.Constant:
                         name_map[refit_node.inputs[i].name] = inp.name
+
         def map_name(name):
             if name in name_map:
                 return name_map[name]
@@ -141,15 +151,14 @@ class Engine():
         for layer_name, role in zip(all_weights[0], all_weights[1]):
             # for speciailized roles, use a unique name in the map:
             if role == trt.WeightsRole.KERNEL:
-                name = layer_name+"_TRTKERNEL"
+                name = layer_name + "_TRTKERNEL"
             elif role == trt.WeightsRole.BIAS:
-                name = layer_name+"_TRTBIAS"
+                name = layer_name + "_TRTBIAS"
             else:
                 name = layer_name
 
             assert name not in refit_dict, "Found duplicate layer: " + name
             refit_dict[name] = None
-
 
         for n in refit_nodes:
             # Constant nodes in ONNX do not have inputs but have a constant output
@@ -161,11 +170,11 @@ class Engine():
             # Handle scale and bias weights
             elif n.op == "Conv":
                 if n.inputs[1].__class__ == gs.Constant:
-                    name = map_name(n.name+"_TRTKERNEL")
+                    name = map_name(n.name + "_TRTKERNEL")
                     add_to_map(refit_dict, name, n.inputs[1].values)
 
                 if n.inputs[2].__class__ == gs.Constant:
-                    name = map_name(n.name+"_TRTBIAS")
+                    name = map_name(n.name + "_TRTBIAS")
                     add_to_map(refit_dict, name, n.inputs[2].values)
 
             # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
@@ -177,9 +186,9 @@ class Engine():
 
         for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
             if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name+"_TRTKERNEL"
+                custom_name = layer_name + "_TRTKERNEL"
             elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name+"_TRTBIAS"
+                custom_name = layer_name + "_TRTBIAS"
             else:
                 custom_name = layer_name
 
@@ -196,7 +205,17 @@ class Engine():
             print("Failed to refit!")
             exit(0)
 
-    def build(self, onnx_path, fp16, input_profile=None, enable_refit=False, enable_preview=False, enable_all_tactics=False, timing_cache=None, update_output_names=None):
+    def build(
+        self,
+        onnx_path,
+        fp16,
+        input_profile=None,
+        enable_refit=False,
+        enable_preview=False,
+        enable_all_tactics=False,
+        timing_cache=None,
+        update_output_names=None,
+    ):
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
         p = [Profile()]
         if input_profile:
@@ -208,21 +227,24 @@ class Engine():
 
         config_kwargs = {}
         if not enable_all_tactics:
-            config_kwargs['tactic_sources'] = []
+            config_kwargs["tactic_sources"] = []
 
-        network = network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM])
+        network = network_from_onnx_path(
+            onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]
+        )
         if update_output_names:
             print(f"Updating network outputs to {update_output_names}")
             network = ModifyNetworkOutputs(network, update_output_names)
         engine = engine_from_network(
             network,
-            config=CreateConfig(fp16=fp16,
+            config=CreateConfig(
+                fp16=fp16,
                 refittable=enable_refit,
                 profiles=p,
                 load_timing_cache=timing_cache,
-                **config_kwargs
+                **config_kwargs,
             ),
-            save_timing_cache=timing_cache
+            save_timing_cache=timing_cache,
         )
         save_engine(engine, path=self.engine_path)
 
@@ -237,7 +259,7 @@ class Engine():
         else:
             self.context = self.engine.create_execution_context()
 
-    def allocate_buffers(self, shape_dict=None, device='cuda'):
+    def allocate_buffers(self, shape_dict=None, device="cuda"):
         for idx in range(self.engine.num_io_tensors):
             binding = self.engine[idx]
             if shape_dict and binding in shape_dict:
@@ -247,11 +269,12 @@ class Engine():
             dtype = trt.nptype(self.engine.get_binding_dtype(binding))
             if self.engine.binding_is_input(binding):
                 self.context.set_binding_shape(idx, shape)
-            tensor = torch.empty(tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]).to(device=device)
+            tensor = torch.empty(
+                tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]
+            ).to(device=device)
             self.tensors[binding] = tensor
 
     def infer(self, feed_dict, stream, use_cuda_graph=False):
-        
         for name, buf in feed_dict.items():
             self.tensors[name].copy_(buf)
 
@@ -284,7 +307,7 @@ class Engine():
         for opt_profile in range(self.engine.num_optimization_profiles):
             out += f"Profile {opt_profile}:\n"
             for binding_idx in range(self.engine.num_bindings):
-                name = self.engine.get_binding_name(binding_idx) 
+                name = self.engine.get_binding_name(binding_idx)
                 shape = self.engine.get_profile_shape(opt_profile, name)
                 out += f"\t{name} = {shape}\n"
         return out
