@@ -96,9 +96,9 @@ class TRTSettings:
     def is_compatabile(self, bs, w, h, n_tokens):
         if self.is_static_shape:
             return (
-                bs == self.trt_batch_opt
-                and w == self.trt_width_opt
-                and h == self.trt_height_opt
+                bs == self.trt_batch_opt * 2
+                and w == self.trt_width_opt // 8
+                and h == self.trt_height_opt // 8
                 and n_tokens == self.trt_token_count_opt
             )
         else:
@@ -111,7 +111,7 @@ class TRTSettings:
                 and h <= self.trt_height_max // 8
                 and n_tokens >= self.trt_token_count_min
                 and n_tokens <= self.trt_token_count_max
-            )  # TODO improve by adding token count
+            )
 
     def distance(self, bs, h, w):
         return (
@@ -153,9 +153,9 @@ class TRTSettings:
             trt_width_min=int(_min[2]),
             trt_width_opt=int(_opt[2]),
             trt_width_max=int(_max[2]),
-            trt_token_count_min=int(_min[3]),
-            trt_token_count_opt=int(_opt[3]),
-            trt_token_count_max=int(_max[3]),
+            trt_token_count_min=(int(_min[3])//75)*77,
+            trt_token_count_opt=(int(_opt[3])//75)*77,
+            trt_token_count_max=(int(_max[3])//75)*77,
             use_fp32=fp32,
             is_static_shape=static_shape,
         )
@@ -260,9 +260,9 @@ def export_unet_to_trt(
         pipeline = PIPELINE_TYPE.INPAINT
     controlnet = None  # TODO Controlnet
 
-    min_textlen = (token_count_min // 75) * 77
-    opt_textlen = (token_count_opt // 75) * 77
-    max_textlen = (token_count_max // 75) * 77
+    min_textlen = (trt_settings.trt_token_count_max // 75) * 77
+    opt_textlen = (trt_settings.trt_token_count_opt // 75) * 77
+    max_textlen = (trt_settings.trt_token_count_max // 75) * 77
 
     if shared.sd_model.is_sdxl:
         pipeline = PIPELINE_TYPE.SD_XL_BASE
@@ -576,7 +576,9 @@ def on_ui_tabs():
                 trt_info = gr.HTML(elem_id="trt_info", value="")
 
         with gr.Row(equal_height=False):
-            trt_available_models = gr.Markdown(elem_id="trt_available_models", value=engine_profile_card())
+            trt_available_models = gr.Markdown(
+                elem_id="trt_available_models", value=engine_profile_card()
+            )
 
         button_export_unet.click(
             wrap_gradio_gpu_call(

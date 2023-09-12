@@ -12,7 +12,7 @@ from utilities import Engine
 from exporter import get_cc
 from typing import List
 from ui_trt import TRTSettings, get_available_trt_unet
-
+from time import time
 
 class TrtUnetOption(sd_unet.SdUnetOption):
     def __init__(self, name: str, filename: List[str]):

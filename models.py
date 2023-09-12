@@ -873,6 +873,9 @@ class OAIUNet(BaseModel):
         ) = self.get_minmax_dims(
             batch_size, image_height, image_width, static_batch, static_shape
         )
+
+        if self.text_maxlen <= 77:
+            min_batch *= 2
         if self.controlnet is None:
             return {
                 "sample": [
@@ -1104,6 +1107,8 @@ class OAIUNetXL(BaseModel):
         ) = self.get_minmax_dims(
             batch_size, image_height, image_width, static_batch, static_shape
         )
+        if self.text_maxlen <= 77:
+            min_batch *= 2
         return {
             "sample": [
                 (min_batch, self.unet_dim, min_latent_height, min_latent_width),
