@@ -214,7 +214,6 @@ def export_unet_to_trt(
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     cc_major, cc_minor = get_cc()
-
     is_inpaint = False
 
     trt_settings = TRTSettings(
@@ -232,8 +231,12 @@ def export_unet_to_trt(
         trt_token_count_max=token_count_max if not static_shapes else token_count_opt,
         use_fp32=use_fp32,
         is_static_shape=static_shapes,
+        unet_hidden_dim=shared.sd_model.model.diffusion_model.in_channels
     )
     trt_option_hash = trt_settings.hash()
+
+    if trt_settings.unet_hidden_dim == 9:
+        is_inpaint = True
 
     if cc_major < 7:
         use_fp32 = True

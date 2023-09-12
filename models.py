@@ -1033,6 +1033,7 @@ def make_OAIUNet(
         max_batch_size=max_batch_size,
         text_optlen=text_optlen,
         text_maxlen=text_maxlen,
+        unet_dim=(9 if pipeline.is_inpaint() else 4),
         controlnet=get_controlnets_path(controlnet),
     )
 
@@ -1179,7 +1180,7 @@ def make_OAIUNetXL(
         device=device,
         verbose=verbose,
         max_batch_size=max_batch_size,
-        unet_dim=4,
+        unet_dim=(9 if pipeline.is_inpaint() else 4),
         text_optlen=text_optlen,
         text_maxlen=text_maxlen,
     )
