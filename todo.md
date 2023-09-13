@@ -2,11 +2,10 @@
 
 ## ToDo
 
-- Fix stdout bug
-- Memory consumption of dynamic shapes
-- Refactor models
-- Better Hashing
-
+- Fix stdout bug in export
+- LoRA
+- Controlnet
+  
 ## Notes
 
 - SD 2.1 768 required to enable f32 attention in settings
@@ -15,6 +14,15 @@
 ## Questions
 
 - Why does inpainting only have four dims?
-- How to overload the refiner model
-- How to empty U#Net VRAM from Torch
+  - Apperently model dependent...
+- How to overload the refiner model / Why dosent SDXL call the TRT Unet
+  - Fixed in dev branch
 - What is the num classes in SDXL
+  - Don't know. But fair to assume that they are constant
+
+- If the TRT labels are the same as the model can it be selected automatically?
+
+### Optional
+
+- Convert batches in forward call. Iterate over batch.
+- Create context without RAM

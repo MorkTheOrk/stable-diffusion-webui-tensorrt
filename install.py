@@ -23,6 +23,6 @@ def install():
         info("GS is not installed! Installing...")
         launch.run_pip(f'install onnx-graphsurgeon --extra-index-url https://pypi.ngc.nvidia.com', "onnx-graphsurgeon")
 
-    # TODO
+    # TODO optional 
     # onnxruntime==1.15
 install()

@@ -12,27 +12,31 @@ from modules import shared, devices
 from utilities import Engine
 import os
 
+
 def get_cc():
     cc_major = torch.cuda.get_device_properties(0).major
     cc_minor = torch.cuda.get_device_properties(0).minor
     return cc_major, cc_minor
 
-def export_onnx(onnx_path, modelobj=None, profile=None, opset=17, is_xl=False):
+
+def export_onnx(
+    onnx_path, modelobj=None, profile=None, opset=17, diable_optimizations=False
+):
     swap_sdpa = hasattr(F, "scaled_dot_product_attention")
     old_sdpa = getattr(F, "scaled_dot_product_attention", None) if swap_sdpa else None
     if swap_sdpa:
         delattr(F, "scaled_dot_product_attention")
 
     def disable_checkpoint(self):
-        if getattr(self, 'use_checkpoint', False) == True:
+        if getattr(self, "use_checkpoint", False) == True:
             self.use_checkpoint = False
-        if getattr(self, 'checkpoint', False) == True:
+        if getattr(self, "checkpoint", False) == True:
             self.checkpoint = False
 
     shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
 
     sd_unet.apply_unet("None")
-    sd_hijack.model_hijack.apply_optimizations('None')
+    sd_hijack.model_hijack.apply_optimizations("None")
 
     os.makedirs("onnx_tmp", exist_ok=True)
     tmp_path = os.path.abspath(os.path.join("onnx_tmp", "tmp.onnx"))
@@ -53,7 +57,6 @@ def export_onnx(onnx_path, modelobj=None, profile=None, opset=17, is_xl=False):
                 export_params=True,
                 opset_version=opset,
                 do_constant_folding=True,
-                use_external_data_format=is_xl,
                 input_names=modelobj.get_input_names(),
                 output_names=modelobj.get_output_names(),
                 dynamic_axes=modelobj.get_dynamic_axes(),
@@ -62,7 +65,10 @@ def export_onnx(onnx_path, modelobj=None, profile=None, opset=17, is_xl=False):
         info("Optimize ONNX.")
 
         onnx_graph = onnx.load(tmp_path)
-        onnx_opt_graph = modelobj.optimize(onnx_graph)
+        if diable_optimizations:
+            onnx_opt_graph = onnx_graph
+        else:
+            onnx_opt_graph = modelobj.optimize(onnx_graph)
 
         if onnx_opt_graph.ByteSize() > 2147483648:
             onnx.save_model(
@@ -75,11 +81,12 @@ def export_onnx(onnx_path, modelobj=None, profile=None, opset=17, is_xl=False):
         else:
             onnx.save(onnx_opt_graph, onnx_path)
         info("ONNX export complete.")
+        del onnx_opt_graph
     except Exception as e:
         error(e)
-    
+        exit()
+
     # CleanUp
-    del onnx_opt_graph
     if swap_sdpa and old_sdpa:
         setattr(F, "scaled_dot_product_attention", old_sdpa)
     sd_hijack.model_hijack.apply_optimizations()
@@ -92,13 +99,13 @@ def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
     engine = Engine(trt_path)
     s = time.time()
     engine.build(
-            onnx_path,
-            use_fp16,
-            enable_refit=True,
-            enable_preview=True,
-            timing_cache=timing_cache,
-            input_profile=[profile],
-            # hwCompatibility=hwCompatibility,
-        )
+        onnx_path,
+        use_fp16,
+        enable_refit=True,
+        enable_preview=True,
+        timing_cache=timing_cache,
+        input_profile=[profile],
+        # hwCompatibility=hwCompatibility,
+    )
     e = time.time()
     info(f"Time taken to build: {(e-s)}s")
