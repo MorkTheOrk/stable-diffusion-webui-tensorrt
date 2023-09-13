@@ -46,8 +46,8 @@ class TrtUnet(sd_unet.SdUnet):
             "encoder_hidden_states": context, # TODO kwargs for SDXL
         }
 
-        # tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
-        # self.engine.context.device_memory = tmp.data_ptr()
+        tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
+        self.engine.context.device_memory = tmp.data_ptr()
         self.cudaStream = torch.cuda.current_stream().cuda_stream
         self.engine.allocate_buffers(feed_dict)
 
@@ -59,7 +59,7 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine.load()
         print(self.engine)
         self.engine_vram_req = self.engine.engine.device_memory_size
-        self.engine.activate(False)
+        self.engine.activate(True)
 
     def deactivate(self):
         del self.engine
