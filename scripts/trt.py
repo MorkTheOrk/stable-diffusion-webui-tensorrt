@@ -41,12 +41,12 @@ class TrtUnet(sd_unet.SdUnet):
 
     def forward(self, x, timesteps, context, *args, **kwargs):
         feed_dict = {
-            "sample": x,
-            "timesteps": timesteps,
-            "encoder_hidden_states": context,
+            "sample": x.float(),
+            "timesteps": timesteps.float(),
+            "encoder_hidden_states": context.float(),
         }
         if "y" in kwargs:
-            feed_dict["y"] = kwargs["y"]  # TODO need to be tested
+            feed_dict["y"] = kwargs["y"].float()
 
         # Need to check compatability on the fly
         if self.shape_hash != hash(x.shape):

@@ -2,7 +2,7 @@ import html
 import os
 
 import launch
-from modules import script_callbacks, paths_internal, shared
+from modules import script_callbacks, sd_models, paths_internal, shared
 import gradio as gr
 
 from modules.call_queue import wrap_gradio_gpu_call
@@ -10,7 +10,7 @@ from modules.shared import cmd_opts
 from modules.ui_components import FormRow
 
 from exporter import export_onnx, export_trt, get_cc
-from utilities import PIPELINE_TYPE
+from utilities import PIPELINE_TYPE, Engine
 from models import make_OAIUNetXL, make_OAIUNet
 from logging import info
 import logging
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import gc
 import torch
 from collections import defaultdict
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,6 +30,7 @@ TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
 if not os.path.exists(TRT_MODEL_DIR):
     os.makedirs(TRT_MODEL_DIR)
 
+LORA_MODEL_DIR = os.path.join(paths_internal.models_path, "Lora")
 NVIDIA_CACHE_URL = ""
 
 
@@ -118,9 +120,10 @@ class TRTSettings:
             abs(bs - self.trt_batch_opt * 2)
             + abs(h - self.trt_height_opt // 8)
             + abs(w - self.trt_width_opt // 8)
-            + abs(w - self.trt_width_max // 8)
-            + abs(h - self.trt_height_max // 8)
-            + abs(bs - self.trt_batch_max * 2)
+            + abs(w - self.trt_width_max // 8) / 2
+            + abs(h - self.trt_height_max // 8) / 2
+            + abs(bs - self.trt_batch_max * 2) / 2
+            - self.is_static_shape * 100
         )
 
     @staticmethod
@@ -153,9 +156,9 @@ class TRTSettings:
             trt_width_min=int(_min[2]),
             trt_width_opt=int(_opt[2]),
             trt_width_max=int(_max[2]),
-            trt_token_count_min=(int(_min[3])//75)*77,
-            trt_token_count_opt=(int(_opt[3])//75)*77,
-            trt_token_count_max=(int(_max[3])//75)*77,
+            trt_token_count_min=(int(_min[3]) // 75) * 77,
+            trt_token_count_opt=(int(_opt[3]) // 75) * 77,
+            trt_token_count_max=(int(_max[3]) // 75) * 77,
             use_fp32=fp32,
             is_static_shape=static_shape,
         )
@@ -207,15 +210,19 @@ def export_unet_to_trt(
     token_count_min,
     token_count_opt,
     token_count_max,
-    use_fp32,
     force_export,
     static_shapes,
-    controlnet,
+    controlnet=None
 ):
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     cc_major, cc_minor = get_cc()
     is_inpaint = False
+
+    use_fp32 = False
+    if cc_major < 7:
+        use_fp32 = True
+        gr.Info("Disabling FP16 because your GPU does not support it.")
 
     trt_settings = TRTSettings(
         trt_batch_min=batch_min if not static_shapes else batch_opt,
@@ -238,10 +245,6 @@ def export_unet_to_trt(
 
     if trt_settings.unet_hidden_dim == 9:
         is_inpaint = True
-
-    if cc_major < 7:
-        use_fp32 = True
-        info("Disabling FP16 because your GPU does not support it.")
 
     onnx_filename = "_".join([model_name, model_hash]) + ".onnx"
     onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
@@ -284,17 +287,17 @@ def export_unet_to_trt(
         diable_optimizations = False
 
     if not os.path.exists(onnx_path):
-        info("No ONNX file found. Exporting...")
+        gr.Info("No ONNX file found. Exporting...")
         export_onnx(
             onnx_path,
             modelobj,
             profile=modelobj.get_input_profile(1, width_opt, height_opt, False, False),
             diable_optimizations=diable_optimizations,
         )
-        info("Exported to ONNX.")
+        gr.Info("Exported to ONNX.")
 
     if not os.path.exists(trt_path) or force_export:
-        info("No TensorRT file found. Building...")
+        gr.Info("No TensorRT file found. Building...")
         static_batch = False
         if batch_max == batch_min:
             static_batch = True
@@ -309,24 +312,90 @@ def export_unet_to_trt(
             ),
             use_fp16=not use_fp32,
         )
-        info("Built TensorRT file.")
+        gr.Info("Built TensorRT file.")
     else:
-        info(
+        gr.Info(
             "TensorRT file found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild."
         )
 
     f"Saved as {trt_path}", ""
 
 
-def get_settings_from_version(version):
-    if version == "1.x":
-        return 1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150
-    elif version == "2.x":
-        return 1, 1, 1, 256, 512, 768, 256, 512, 768, 75, 75, 150
-    elif version == "XL Base":
-        return 1, 1, 1, 512, 1024, 1024, 512, 1024, 1024, 75, 75, 150
+def export_lora_to_trt(lora_name, force_export):
+    model_hash = shared.sd_model.sd_checkpoint_info.hash
+    model_name = shared.sd_model.sd_checkpoint_info.model_name
+
+    lora_model = available_lora_models[lora_name]
+
+    onnx_lora_filename = "_".join([model_name, lora_name]) + ".onnx"
+    onnx_lora_path = os.path.join(ONNX_MODEL_DIR, onnx_lora_filename)
+
+    onnx_base_filename = "_".join([model_name, model_hash]) + ".onnx"
+    onnx_base_path = os.path.join(ONNX_MODEL_DIR, onnx_base_filename)
+    
+    is_inpaint = False
+    if shared.sd_model.model.diffusion_model.in_channels == 9:
+        is_inpaint = True
+    version = get_version_from_model(shared.sd_model)
+    pipeline = PIPELINE_TYPE.TXT2IMG
+    if is_inpaint:
+        pipeline = PIPELINE_TYPE.INPAINT
+
+    if shared.sd_model.is_sdxl:
+        pipeline = PIPELINE_TYPE.SD_XL_BASE
+        modelobj = make_OAIUNetXL(
+            version, pipeline, "cuda", False, 1, 77, 77
+        )
+        diable_optimizations = True
     else:
-        return 1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150
+        modelobj = make_OAIUNet(
+            version,
+            pipeline,
+            "cuda",
+            False,
+            1,
+            77,
+            77,
+            None,
+        )
+        diable_optimizations = False
+
+    if not os.path.exists(onnx_lora_path):
+        gr.Info("No ONNX file found. Exporting...")
+        export_onnx(
+            onnx_lora_path,
+            modelobj,
+            profile=modelobj.get_input_profile(1, 512, 512, False, False),
+            diable_optimizations=diable_optimizations,
+            lora_path=lora_model["filename"]
+        )
+        gr.Info("Exported to ONNX.")
+
+    trt_refit_path = os.path.join(TRT_MODEL_DIR, onnx_lora_filename.replace(".onnx", ".trt"))
+
+    if not os.path.exists(onnx_base_path):
+        raise ValueError("Please export the base model first.")
+    
+    if not os.path.exists(trt_refit_path) or force_export:
+        gr.Info("No TensorRT file found. Building...")
+        engine = Engine(trt_refit_path)
+        engine.refit(onnx_base_path, onnx_lora_path, dump_refit=True) #TODO: Add refit
+        gr.Info("Built TensorRT file.")
+
+
+profile_presets = {
+    "512x512 (Static)": (1, 1, 1, 512, 512, 512, 512, 512, 512, 75, 75, 75),
+    "768x768 (Static)": (1, 1, 1, 768, 768, 768, 768, 768, 768, 75, 75, 75),
+    "1024x1024 (Static)": (1, 1, 1, 1024, 1024, 1024, 1024, 1024, 1024, 75, 75, 75),
+    "512x512 (Dynamic)": (1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150),
+    "768x768 (Dynamic)": (1, 1, 1, 512, 768, 1024, 512, 768, 1024, 75, 75, 150),
+    "1024x1024 (Dynamic)": (1, 1, 1, 512, 1024, 1536, 512, 1024, 1536, 75, 75, 150),
+}
+def get_settings_from_version(version):
+    static = False
+    if "Static" in version:
+        static = True
+    return *profile_presets[version], static
 
 
 def diable_export(version):
@@ -375,193 +444,259 @@ def engine_profile_card():
     # print(out_string)
     return out_string
 
+def get_version_from_filename(name):
+    if "v1-" in name:
+        return "1.5"
+    elif "v2-" in name:
+        return "2.1"
+    else:
+        return None
+
+available_lora_models = {}
+def get_lora_checkpoints():
+    canditates = list(shared.walk_files(shared.cmd_opts.lora_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
+    for filename in canditates:
+        name = os.path.splitext(os.path.basename(filename))[0]
+        metadata = sd_models.read_metadata_from_safetensors(filename)
+        available_lora_models[name] = {"filename": filename, "version": get_version_from_filename(metadata["ss_sd_model_name"])}    
+    return [k for k, v in available_lora_models.items() if v["version"] == get_version_from_model(shared.sd_model)]
+
 
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
         with gr.Row(equal_height=True):
             with gr.Column(variant="panel"):
-                gr.Markdown(
-                    value="# TensorRT Exporter",
-                )
-
-                version = gr.Dropdown(
-                    label="Stable Diffusion Version",
-                    choices=["1.x", "2.x", "XL Base"],
-                    elem_id="sd_version",
-                    default=None,
-                )
-
-                with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                    is_controlnet = gr.Checkbox(
-                        label="Is ControlNet Model.",
-                        value=False,
-                        elem_id="trt_controlnet",
-                    )
-
-                with gr.Accordion("Advanced Settings", open=False):
-                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                        static_shapes = gr.Checkbox(
-                            label="Use static shapes.",
-                            value=False,
-                            elem_id="trt_static_shapes",
+                with gr.Tabs(elem_id="trt_tabs"):
+                    with gr.Tab(label="TensorRT Exporter"):
+                        gr.Markdown(
+                            value="# TensorRT Exporter",
                         )
 
-                    with gr.Column(elem_id="trt_width"):
-                        trt_width_opt = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Optimal width",
-                            value=512,
-                            elem_id="trt_opt_width",
-                        )
-                        trt_width_min = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Min width",
-                            value=256,
-                            elem_id="trt_min_width",
-                        )
-                        trt_width_max = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Max width",
-                            value=768,
-                            elem_id="trt_max_width",
+                        version = gr.Dropdown(
+                            label="Preset",
+                            choices=list(profile_presets.keys()),
+                            elem_id="sd_version",
+                            default=None,
                         )
 
-                    with gr.Column(elem_id="trt_height"):
-                        trt_height_opt = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Optimal height",
-                            value=512,
-                            elem_id="trt_opt_height",
-                        )
-                        trt_height_min = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Min height",
-                            value=256,
-                            elem_id="trt_min_height",
-                        )
-                        trt_height_max = gr.Slider(
-                            minimum=256,
-                            maximum=2048,
-                            step=64,
-                            label="Max height",
-                            value=768,
-                            elem_id="trt_max_height",
+                        # with FormRow(elem_classes="checkboxes-row", variant="compact"):
+                        #     is_controlnet = gr.Checkbox(
+                        #         label="Is ControlNet Model.",
+                        #         value=False,
+                        #         elem_id="trt_controlnet",
+                        #     )
+
+                        with gr.Accordion("Advanced Settings", open=False):
+                            with FormRow(
+                                elem_classes="checkboxes-row", variant="compact"
+                            ):
+                                static_shapes = gr.Checkbox(
+                                    label="Use static shapes.",
+                                    value=True,
+                                    elem_id="trt_static_shapes",
+                                )
+
+                            with gr.Column(elem_id="trt_width"):
+                                trt_width_opt = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Optimal width",
+                                    value=512,
+                                    elem_id="trt_opt_width",
+                                )
+                                trt_width_min = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Min width",
+                                    value=256,
+                                    elem_id="trt_min_width",
+                                )
+                                trt_width_max = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Max width",
+                                    value=768,
+                                    elem_id="trt_max_width",
+                                )
+
+                            with gr.Column(elem_id="trt_height"):
+                                trt_height_opt = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Optimal height",
+                                    value=512,
+                                    elem_id="trt_opt_height",
+                                )
+                                trt_height_min = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Min height",
+                                    value=256,
+                                    elem_id="trt_min_height",
+                                )
+                                trt_height_max = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Max height",
+                                    value=768,
+                                    elem_id="trt_max_height",
+                                )
+
+                            with gr.Column(elem_id="trt_max_batch"):
+                                trt_opt_batch = gr.Slider(
+                                    minimum=1,
+                                    maximum=16,
+                                    step=1,
+                                    label="Optimal batch-size",
+                                    value=1,
+                                    elem_id="trt_opt_batch",
+                                )
+                                trt_min_batch = gr.Slider(
+                                    minimum=1,
+                                    maximum=16,
+                                    step=1,
+                                    label="Min batch-size",
+                                    value=1,
+                                    elem_id="trt_min_batch",
+                                )
+                                trt_max_batch = gr.Slider(
+                                    minimum=1,
+                                    maximum=16,
+                                    step=1,
+                                    label="Max batch-size",
+                                    value=1,
+                                    elem_id="trt_max_batch",
+                                )
+
+                            with gr.Column(elem_id="trt_token_count"):
+                                trt_token_count_opt = gr.Slider(
+                                    minimum=75,
+                                    maximum=750,
+                                    step=75,
+                                    label="Optimal prompt token count",
+                                    value=75,
+                                    elem_id="trt_opt_token_count_opt",
+                                )
+                                trt_token_count_min = gr.Slider(
+                                    minimum=75,
+                                    maximum=750,
+                                    step=75,
+                                    label="Min prompt token count",
+                                    value=75,
+                                    elem_id="trt_opt_token_count_min",
+                                )
+                                trt_token_count_max = gr.Slider(
+                                    minimum=75,
+                                    maximum=750,
+                                    step=75,
+                                    label="Max prompt token count",
+                                    value=150,
+                                    elem_id="trt_opt_token_count_max",
+                                )
+
+                            # with FormRow(
+                            #     elem_classes="checkboxes-row", variant="compact"
+                            # ):
+                            #     use_fp32 = gr.Checkbox(
+                            #         label="FP32", value=False, elem_id="trt_fp32"
+                            #     )
+
+                            with FormRow(
+                                elem_classes="checkboxes-row", variant="compact"
+                            ):
+                                force_rebuild = gr.Checkbox(
+                                    label="Force Rebuild.",
+                                    value=False,
+                                    elem_id="trt_force_rebuild",
+                                )
+
+                        button_export_unet = gr.Button(
+                            value="Convert Unet to TensorRT",
+                            variant="primary",
+                            elem_id="trt_export_unet",
+                            visible=False,
                         )
 
-                    with gr.Column(elem_id="trt_max_batch"):
-                        trt_opt_batch = gr.Slider(
-                            minimum=1,
-                            maximum=16,
-                            step=1,
-                            label="Optimal batch-size",
-                            value=1,
-                            elem_id="trt_opt_batch",
+                        version.change(
+                            get_settings_from_version,
+                            version,
+                            [
+                                trt_min_batch,
+                                trt_opt_batch,
+                                trt_max_batch,
+                                trt_height_min,
+                                trt_height_opt,
+                                trt_height_max,
+                                trt_width_min,
+                                trt_width_opt,
+                                trt_width_max,
+                                trt_token_count_min,
+                                trt_token_count_opt,
+                                trt_token_count_max,
+                                static_shapes
+                            ],
                         )
-                        trt_min_batch = gr.Slider(
-                            minimum=1,
-                            maximum=16,
-                            step=1,
-                            label="Min batch-size",
-                            value=1,
-                            elem_id="trt_min_batch",
-                        )
-                        trt_max_batch = gr.Slider(
-                            minimum=1,
-                            maximum=16,
-                            step=1,
-                            label="Max batch-size",
-                            value=1,
-                            elem_id="trt_max_batch",
-                        )
-
-                    with gr.Column(elem_id="trt_token_count"):
-                        trt_token_count_opt = gr.Slider(
-                            minimum=75,
-                            maximum=750,
-                            step=75,
-                            label="Optimal prompt token count",
-                            value=75,
-                            elem_id="trt_opt_token_count_opt",
-                        )
-                        trt_token_count_min = gr.Slider(
-                            minimum=75,
-                            maximum=750,
-                            step=75,
-                            label="Min prompt token count",
-                            value=75,
-                            elem_id="trt_opt_token_count_min",
-                        )
-                        trt_token_count_max = gr.Slider(
-                            minimum=75,
-                            maximum=750,
-                            step=75,
-                            label="Max prompt token count",
-                            value=150,
-                            elem_id="trt_opt_token_count_max",
+                        version.change(diable_export, version, button_export_unet)
+                        static_shapes.change(
+                            diable_visibility,
+                            static_shapes,
+                            [
+                                trt_min_batch,
+                                trt_max_batch,
+                                trt_height_min,
+                                trt_height_max,
+                                trt_width_min,
+                                trt_width_max,
+                                trt_token_count_min,
+                                trt_token_count_max,
+                            ],
                         )
 
-                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                        use_fp32 = gr.Checkbox(
-                            label="FP32", value=False, elem_id="trt_fp32"
+                    with gr.Tab(label="TensorRT LoRA"):
+                        gr.Markdown("# Apply LoRA checkpoint to TensorRT model")
+                        lora_refresh_button = gr.Button(
+                            value="Refresh",
+                            variant="primary",
+                            elem_id="trt_lora_refresh",
                         )
 
-                    with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                        force_rebuild = gr.Checkbox(
-                            label="Force Rebuild.",
-                            value=False,
-                            elem_id="trt_force_rebuild",
+                        trt_lora_dropdown = gr.Dropdown(
+                            choices=get_lora_checkpoints(),
+                            elem_id="lora_model",
+                            label="LoRA Model",
+                            default=None,
                         )
 
-                button_export_unet = gr.Button(
-                    value="Convert Unet to TensorRT",
-                    variant="primary",
-                    elem_id="trt_export_unet",
-                    visible=False,
-                )
+                        with FormRow(
+                                elem_classes="checkboxes-row", variant="compact"
+                            ):
+                                trt_lora_force_rebuild = gr.Checkbox(
+                                    label="Force Rebuild.",
+                                    value=False,
+                                    elem_id="trt_lora_force_rebuild",
+                                )
 
-                version.change(
-                    get_settings_from_version,
-                    version,
-                    [
-                        trt_min_batch,
-                        trt_opt_batch,
-                        trt_max_batch,
-                        trt_height_min,
-                        trt_height_opt,
-                        trt_height_max,
-                        trt_width_min,
-                        trt_width_opt,
-                        trt_width_max,
-                        trt_token_count_min,
-                        trt_token_count_opt,
-                        trt_token_count_max,
-                    ],
-                )
-                version.change(diable_export, version, button_export_unet)
-                static_shapes.change(
-                    diable_visibility,
-                    static_shapes,
-                    [
-                        trt_min_batch,
-                        trt_max_batch,
-                        trt_height_min,
-                        trt_height_max,
-                        trt_width_min,
-                        trt_width_max,
-                        trt_token_count_min,
-                        trt_token_count_max,
-                    ],
-                )
+                        button_export_lora_unet = gr.Button(
+                            value="Convert to TensorRT",
+                            variant="primary",
+                            elem_id="trt_lora_export_unet",
+                            visible=False,
+                        )
+
+                        lora_refresh_button.click(
+                            get_lora_checkpoints,
+                            None,
+                            trt_lora_dropdown,
+                        )
+                        trt_lora_dropdown.change(
+                            diable_export, trt_lora_dropdown, button_export_lora_unet
+                        )
 
             with gr.Column(variant="panel"):
                 with open(
@@ -597,11 +732,17 @@ def on_ui_tabs():
                 trt_token_count_min,
                 trt_token_count_opt,
                 trt_token_count_max,
-                use_fp32,
                 force_rebuild,
                 static_shapes,
-                is_controlnet,
             ],
+            outputs=[trt_result, trt_info],
+        )
+
+        button_export_lora_unet.click(
+            wrap_gradio_gpu_call(
+                export_lora_to_trt, extra_outputs=["Conversion failed"]
+            ),
+            inputs=[trt_lora_dropdown, trt_lora_force_rebuild],
             outputs=[trt_result, trt_info],
         )
 

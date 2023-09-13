@@ -876,32 +876,38 @@ class OAIUNet(BaseModel):
 
         if self.text_maxlen <= 77:
             min_batch *= 2
+            batch_size *= 2
+            max_batch *= 2
+        elif self.text_maxlen > 77 and not static_shape:
+            batch_size *= 2
+            max_batch *= 2
+
         if self.controlnet is None:
             return {
                 "sample": [
                     (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                    (2 * batch_size, self.unet_dim, latent_height, latent_width),
-                    (2 * max_batch, self.unet_dim, max_latent_height, max_latent_width),
+                    (batch_size, self.unet_dim, latent_height, latent_width),
+                    (max_batch, self.unet_dim, max_latent_height, max_latent_width),
                 ],
-                "timesteps": [(min_batch,), (2 * batch_size,), (2 * max_batch,)],
+                "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
                 "encoder_hidden_states": [
                     (min_batch, self.text_optlen, self.embedding_dim),
-                    (2 * batch_size, self.text_optlen, self.embedding_dim),
-                    (2 * max_batch, self.text_maxlen, self.embedding_dim),
+                    (batch_size, self.text_optlen, self.embedding_dim),
+                    (max_batch, self.text_maxlen, self.embedding_dim),
                 ],
             }
         else:
             return {
                 "sample": [
                     (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                    (2 * batch_size, self.unet_dim, latent_height, latent_width),
-                    (2 * max_batch, self.unet_dim, max_latent_height, max_latent_width),
+                    (batch_size, self.unet_dim, latent_height, latent_width),
+                    (max_batch, self.unet_dim, max_latent_height, max_latent_width),
                 ],
-                "timesteps": [(2 * min_batch,), (2 * batch_size,), (2 * max_batch,)],
+                "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
                 "encoder_hidden_states": [
                     (min_batch, self.text_optlen, self.embedding_dim),
-                    (2 * batch_size, self.text_optlen, self.embedding_dim),
-                    (2 * max_batch, self.text_maxlen, self.embedding_dim),
+                    (batch_size, self.text_optlen, self.embedding_dim),
+                    (max_batch, self.text_maxlen, self.embedding_dim),
                 ],
                 "images": [
                     (
@@ -913,14 +919,14 @@ class OAIUNet(BaseModel):
                     ),
                     (
                         len(self.controlnet),
-                        2 * batch_size,
+                        batch_size,
                         3,
                         image_height,
                         image_width,
                     ),
                     (
                         len(self.controlnet),
-                        2 * max_batch,
+                        max_batch,
                         3,
                         max_image_height,
                         max_image_width,
@@ -1107,24 +1113,31 @@ class OAIUNetXL(BaseModel):
         ) = self.get_minmax_dims(
             batch_size, image_height, image_width, static_batch, static_shape
         )
+
         if self.text_maxlen <= 77:
             min_batch *= 2
+            batch_size *= 2
+            max_batch *= 2
+        elif self.text_maxlen > 77 and not static_shape:
+            batch_size *= 2
+            max_batch *= 2
+
         return {
             "sample": [
                 (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                (2 * batch_size, self.unet_dim, latent_height, latent_width),
-                (2 * max_batch, self.unet_dim, max_latent_height, max_latent_width),
+                (batch_size, self.unet_dim, latent_height, latent_width),
+                (max_batch, self.unet_dim, max_latent_height, max_latent_width),
             ],
-            "timesteps": [(min_batch,), (2 * batch_size,), (2 * max_batch,)],
+            "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
             "encoder_hidden_states": [
                 (min_batch, self.text_optlen, self.embedding_dim),
-                (2 * batch_size, self.text_optlen, self.embedding_dim),
-                (2 * max_batch, self.text_maxlen, self.embedding_dim),
+                (batch_size, self.text_optlen, self.embedding_dim),
+                (max_batch, self.text_maxlen, self.embedding_dim),
             ],
             "y": [
                 (min_batch, self.num_classes),
-                (2 * batch_size, self.num_classes),
-                (2 * max_batch, self.num_classes),
+                (batch_size, self.num_classes),
+                (max_batch, self.num_classes),
             ],
         }
 

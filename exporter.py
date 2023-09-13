@@ -18,9 +18,14 @@ def get_cc():
     cc_minor = torch.cuda.get_device_properties(0).minor
     return cc_major, cc_minor
 
+def apply_lora(model, lora_path):
+    pass
+    # load LORA
+    # networks.originals = lora_patches.LoraPatches()
+    # networks.assign_network_names_to_compvis_modules(model)
 
 def export_onnx(
-    onnx_path, modelobj=None, profile=None, opset=17, diable_optimizations=False
+    onnx_path, modelobj=None, profile=None, opset=17, diable_optimizations=False, lora_path=None
 ):
     swap_sdpa = hasattr(F, "scaled_dot_product_attention")
     old_sdpa = getattr(F, "scaled_dot_product_attention", None) if swap_sdpa else None
@@ -50,6 +55,10 @@ def export_onnx(
                 profile["sample"][1][-1] * 8,
             )
             model = shared.sd_model.model.diffusion_model
+
+            if lora_path:
+                model = apply_lora(model, lora_path)
+
             torch.onnx.export(
                 model,
                 inputs,
