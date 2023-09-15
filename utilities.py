@@ -102,7 +102,7 @@ class Engine:
         del self.buffers
         del self.tensors
 
-    def refit(self, onnx_path, onnx_refit_path, dupt_refit=False):
+    def refit(self, onnx_path, onnx_refit_path, dump_refit=False):
         def convert_int64(arr):
             # TODO: smarter conversion
             if len(arr.shape) == 0:

@@ -371,7 +371,8 @@ def export_lora_to_trt(lora_name, force_export):
         )
         gr.Info("Exported to ONNX.")
 
-    trt_refit_path = os.path.join(TRT_MODEL_DIR, onnx_lora_filename.replace(".onnx", ".trt"))
+    # Todo: User selectable? Which TRT engine is the base for refit -> results into a new engine?
+    trt_refit_path = os.path.join(TRT_MODEL_DIR, "v1-5-pruned_30edaeec_cc89_1x512x512x75.trt")
 
     if not os.path.exists(onnx_base_path):
         raise ValueError("Please export the base model first.")
@@ -379,7 +380,8 @@ def export_lora_to_trt(lora_name, force_export):
     if not os.path.exists(trt_refit_path) or force_export:
         gr.Info("No TensorRT file found. Building...")
         engine = Engine(trt_refit_path)
-        engine.refit(onnx_base_path, onnx_lora_path, dump_refit=True) #TODO: Add refit
+        engine.load() # self.engine != None is important for trt.Refitter
+        engine.refit(onnx_base_path, onnx_lora_path, dump_refit=True) #TODO: Add refit        
         gr.Info("Built TensorRT file.")
 
 
