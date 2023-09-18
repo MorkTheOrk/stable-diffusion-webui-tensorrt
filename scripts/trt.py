@@ -57,6 +57,10 @@ class TrtUnet(sd_unet.SdUnet):
 
         # Need to check compatability on the fly
         if self.shape_hash != hash(x.shape):
+            if x.shape[-1] % 8 or x.shape[-2] % 8:
+                raise ValueError(
+                    "Input shape must be divisible by 64 in both dimensions."
+                )
             self.switch_engine(feed_dict)
             self.shape_hash = hash(x.shape)
 

@@ -1121,10 +1121,10 @@ class OAIUNetXL(BaseModel):
     ):
         if self.text_maxlen <= 77:
             min_batch *= 2
-            batch_size *= 2
+            opt_batch *= 2
             max_batch *= 2
         elif self.text_maxlen > 77 and not static_shape:
-            batch_size *= 2
+            opt_batch *= 2
             max_batch *= 2
 
         (

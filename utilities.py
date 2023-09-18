@@ -32,6 +32,7 @@ import tensorrt as trt
 import torch
 from enum import Enum, auto
 from safetensors.numpy import save_file, load_file
+from logging import error
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
@@ -166,17 +167,26 @@ class Engine:
             if n.op == "Constant":
                 name = map_name(n.outputs[0].name)
                 print(f"Add Constant {name}\n")
-                add_to_map(refit_dict, name, n.outputs[0].values)
+                try:
+                    add_to_map(refit_dict, name, n.outputs[0].values)
+                except:
+                    error(f"Failed to add Constant {name}\n")
 
             # Handle scale and bias weights
             elif n.op == "Conv":
                 if n.inputs[1].__class__ == gs.Constant:
                     name = map_name(n.name + "_TRTKERNEL")
-                    add_to_map(refit_dict, name, n.inputs[1].values)
+                    try:
+                        add_to_map(refit_dict, name, n.inputs[1].values)
+                    except:
+                        error(f"Failed to add Conv {name}\n")
 
                 if n.inputs[2].__class__ == gs.Constant:
                     name = map_name(n.name + "_TRTBIAS")
-                    add_to_map(refit_dict, name, n.inputs[2].values)
+                    try:
+                        add_to_map(refit_dict, name, n.inputs[2].values)
+                    except:
+                        error(f"Failed to add Conv {name}\n")
 
             # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
             else:
@@ -278,6 +288,7 @@ class Engine:
                 refittable=enable_refit,
                 profiles=p,
                 load_timing_cache=timing_cache,
+                profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
                 **config_kwargs,
             ),
             save_timing_cache=timing_cache,

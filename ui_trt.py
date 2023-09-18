@@ -1,7 +1,5 @@
-import html
 import os
 
-import launch
 from modules import sd_models, shared
 import gradio as gr
 
@@ -12,12 +10,10 @@ from modules.ui_components import FormRow
 from exporter import export_onnx, export_trt
 from utilities import PIPELINE_TYPE, Engine
 from models import make_OAIUNetXL, make_OAIUNet
-from logging import info
+from logging import info, error
 import logging
-from dataclasses import dataclass
 import gc
 import torch
-from collections import defaultdict
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
 
 logging.basicConfig(level=logging.INFO)
@@ -53,7 +49,7 @@ def export_unet_to_trt(
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        gr.Info("Disabling FP16 because your GPU does not support it.")
+        info("Disabling FP16 because your GPU does not support it.")
 
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
@@ -109,21 +105,21 @@ def export_unet_to_trt(
     )
 
     if not os.path.exists(onnx_path):
-        gr.Info("No ONNX file found. Exporting...")
+        info("No ONNX file found. Exporting...")
         export_onnx(
             onnx_path,
             modelobj,
             profile=profile,
             diable_optimizations=diable_optimizations,
         )
-        gr.Info("Exported to ONNX.")
+        info("Exported to ONNX.")
 
     trt_engine_filename, trt_path = modelmanager.get_trt_path(
         model_name, model_hash, profile, static_shapes
     )
 
     if not os.path.exists(trt_path) or force_export:
-        gr.Info("No TensorRT file found. Building...")
+        info("No TensorRT file found. Building...")
         gc.collect()
         torch.cuda.empty_cache()
         export_trt(
@@ -133,7 +129,7 @@ def export_unet_to_trt(
             profile=profile,
             use_fp16=not use_fp32,
         )
-        gr.Info("Built TensorRT file.")
+        info("Built TensorRT file.")
         modelmanager.add_entry(
             model_name,
             model_hash,
@@ -147,11 +143,11 @@ def export_unet_to_trt(
             lora=False,
         )  # TODO vram?
     else:
-        gr.Info(
+        info(
             "TensorRT file found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild."
         )
 
-    f"Saved as {trt_path}", ""
+    return f"Saved as {trt_path}", ""
 
 
 def export_lora_to_trt(lora_name, force_export):
@@ -159,7 +155,7 @@ def export_lora_to_trt(lora_name, force_export):
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        gr.Info("Disabling FP16 because your GPU does not support it.")
+        info("Disabling FP16 because your GPU does not support it.")
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
         is_inpaint = True
@@ -201,7 +197,7 @@ def export_lora_to_trt(lora_name, force_export):
         diable_optimizations = False
 
     if not os.path.exists(onnx_lora_path):
-        gr.Info("No ONNX file found. Exporting...")
+        info("No ONNX file found. Exporting...")
         export_onnx(
             onnx_lora_path,
             modelobj,
@@ -211,14 +207,14 @@ def export_lora_to_trt(lora_name, force_export):
             diable_optimizations=diable_optimizations,
             lora_path=lora_model["filename"],
         )
-        gr.Info("Exported to ONNX.")
+        info("Exported to ONNX.")
 
     trt_lora_name = onnx_lora_filename.replace(".onnx", ".trt")
     trt_lora_path = os.path.join(TRT_MODEL_DIR, trt_lora_name)
 
     available_trt_unet = modelmanager.available_models()
     if len(available_trt_unet[base_name]) == 0:
-        gr.Error("Please export the base model first.")
+        error("Please export the base model first.")
         return "Failed", ""
     trt_base_path = os.path.join(
         TRT_MODEL_DIR, available_trt_unet[base_name][0]["filepath"]
@@ -228,11 +224,11 @@ def export_lora_to_trt(lora_name, force_export):
         raise ValueError("Please export the base model first.")
 
     if not os.path.exists(trt_lora_path) or force_export:
-        gr.Info("No TensorRT file found. Building...")
+        info("No TensorRT file found. Building...")
         engine = Engine(trt_base_path)
         engine.load()
         engine.refit(onnx_base_path, onnx_lora_path, dump_refit_path=trt_lora_path)
-        gr.Info("Built TensorRT file.")
+        info("Built TensorRT file.")
 
         modelmanager.add_lora_entry(
             base_name,
@@ -243,6 +239,7 @@ def export_lora_to_trt(lora_name, force_export):
             0,
             unet_hidden_dim,
         )
+    return f"Saved as {trt_lora_name}", ""
 
 
 profile_presets = {
@@ -298,8 +295,10 @@ def get_version_from_filename(name):
         return "1.5"
     elif "v2-" in name:
         return "2.1"
+    elif "xl" in name:
+        return "xl-1.0"
     else:
-        return None
+        return "Unknown"
 
 
 available_lora_models = {}
