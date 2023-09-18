@@ -328,21 +328,6 @@ class Engine:
         for name, tensor in self.tensors.items():
             self.context.set_tensor_address(name, tensor.data_ptr())
 
-        # if use_cuda_graph:
-        #     if self.cuda_graph_instance is not None:
-        #         CUASSERT(cudart.cudaGraphLaunch(self.cuda_graph_instance, stream))
-        #         CUASSERT(cudart.cudaStreamSynchronize(stream))
-        #     else:
-        #         # do inference before CUDA graph capture
-        #         noerror = self.context.execute_async_v3(stream)
-        #         if not noerror:
-        #             raise ValueError(f"ERROR: inference failed.")
-        #         # capture cuda graph
-        #         CUASSERT(cudart.cudaStreamBeginCapture(stream, cudart.cudaStreamCaptureMode.cudaStreamCaptureModeGlobal))
-        #         self.context.execute_async_v3(stream)
-        #         self.graph = CUASSERT(cudart.cudaStreamEndCapture(stream))
-        #         self.cuda_graph_instance = CUASSERT(cudart.cudaGraphInstantiate(self.graph, 0))
-        # else:
         noerror = self.context.execute_async_v3(stream)
         if not noerror:
             raise ValueError(f"ERROR: inference failed.")

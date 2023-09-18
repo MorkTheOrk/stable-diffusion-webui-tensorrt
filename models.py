@@ -24,8 +24,6 @@ import torch
 import torch.nn.functional as F
 import onnx_graphsurgeon as gs
 
-os.environ["POLYGRAPHY_AUTOINSTALL_DEPS"] = "1"
-
 
 class Optimizer:
     def __init__(self, onnx_graph, verbose=False):
@@ -447,19 +445,6 @@ class CLIPWithProj(CLIP):
             output_hidden_states=output_hidden_states,
         )
         self.subfolder = subfolder
-
-    # def get_model(self, framework_model_dir):
-    #     clip_model_dir = os.path.join(framework_model_dir, self.version, self.pipeline, "text_encoder_2")
-    #     if not os.path.exists(clip_model_dir):
-    #         model = CLIPTextModelWithProjection.from_pretrained(self.path,
-    #             subfolder=self.subfolder,
-    #             use_safetensors=self.hf_safetensor,
-    #             use_auth_token=self.hf_token).to(self.device)
-    #         model.save_pretrained(clip_model_dir)
-    #     else:
-    #         print(f"[I] Load CLIP pytorch model from: {clip_model_dir}")
-    #         model = CLIPTextModelWithProjection.from_pretrained(clip_model_dir).to(self.device)
-    #     return model
 
     def get_shape_dict(self, batch_size, image_height, image_width):
         self.check_dims(batch_size, image_height, image_width)
@@ -1237,20 +1222,6 @@ class VAE(BaseModel):
             max_batch_size=max_batch_size,
         )
 
-    # def get_model(self, framework_model_dir):
-    #     vae_decoder_model_path = os.path.join(framework_model_dir, self.version, self.pipeline, "vae_decoder")
-    #     if not os.path.exists(vae_decoder_model_path):
-    #         vae = AutoencoderKL.from_pretrained(self.path,
-    #             subfolder="vae",
-    #             use_safetensors=self.hf_safetensor,
-    #             use_auth_token=self.hf_token).to(self.device)
-    #         vae.save_pretrained(vae_decoder_model_path)
-    #     else:
-    #         print(f"[I] Load VAE decoder pytorch model from: {vae_decoder_model_path}")
-    #         vae = AutoencoderKL.from_pretrained(vae_decoder_model_path).to(self.device)
-    #     vae.forward = vae.decode
-    #     return vae
-
     def get_input_names(self):
         return ["latent"]
 
@@ -1343,10 +1314,6 @@ class VAEEncoder(BaseModel):
             verbose=verbose,
             max_batch_size=max_batch_size,
         )
-
-    # def get_model(self, framework_model_dir):
-    #     vae_encoder = TorchVAEEncoder(self.version, self.pipeline, self.hf_token, self.device, self.path, framework_model_dir, hf_safetensor=self.hf_safetensor)
-    #     return vae_encoder
 
     def get_input_names(self):
         return ["images"]

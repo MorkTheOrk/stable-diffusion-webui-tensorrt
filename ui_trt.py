@@ -10,11 +10,11 @@ from modules.ui_components import FormRow
 from exporter import export_onnx, export_trt
 from utilities import PIPELINE_TYPE, Engine
 from models import make_OAIUNetXL, make_OAIUNet
-from logging import info, error
 import logging
 import gc
 import torch
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
+from time import sleep
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,6 +27,15 @@ def get_version_from_model(sd_model):
     if sd_model.is_sdxl:
         return "xl-1.0"
 
+class LogLevel:
+    Debug = 0
+    Info = 1
+    Warning = 2
+    Error = 3
+
+def log_md(logging_history, message, prefix="**[INFO]:**"):
+    logging_history += f"{prefix} {message} \n"
+    return logging_history
 
 def export_unet_to_trt(
     batch_min,
@@ -45,11 +54,14 @@ def export_unet_to_trt(
     static_shapes,
     controlnet=None,
 ):
+    logging_history = ""
+
     is_inpaint = False
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        info("Disabling FP16 because your GPU does not support it.")
+        logging_history = log_md(logging_history, "Disabling FP16 because your GPU does not support it.")
+        yield logging_history
 
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
@@ -58,6 +70,9 @@ def export_unet_to_trt(
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     onnx_filename, onnx_path = modelmanager.get_onnx_path(model_name, model_hash)
+
+    logging_history = log_md(logging_history, f"Exporting {model_name} to TensorRT", prefix="###")
+    yield logging_history
 
     timing_cache = modelmanager.get_timing_cache(allow_remote=False)
 
@@ -105,21 +120,24 @@ def export_unet_to_trt(
     )
 
     if not os.path.exists(onnx_path):
-        info("No ONNX file found. Exporting...")
+        logging_history = log_md(logging_history, "No ONNX file found. Exporting...")
+        yield logging_history
         export_onnx(
             onnx_path,
             modelobj,
             profile=profile,
             diable_optimizations=diable_optimizations,
         )
-        info("Exported to ONNX.")
+        logging_history = log_md(logging_history, "Exported to ONNX.")
+        yield logging_history
 
     trt_engine_filename, trt_path = modelmanager.get_trt_path(
         model_name, model_hash, profile, static_shapes
     )
 
     if not os.path.exists(trt_path) or force_export:
-        info("No TensorRT file found. Building...")
+        logging_history = log_md(logging_history, "No TensorRT file found. Building... This can take a while.")
+        yield logging_history
         gc.collect()
         torch.cuda.empty_cache()
         export_trt(
@@ -129,7 +147,8 @@ def export_unet_to_trt(
             profile=profile,
             use_fp16=not use_fp32,
         )
-        info("Built TensorRT file.")
+        logging_history = log_md(logging_history, "Built TensorRT file.")
+        yield logging_history
         modelmanager.add_entry(
             model_name,
             model_hash,
@@ -143,19 +162,22 @@ def export_unet_to_trt(
             lora=False,
         )  # TODO vram?
     else:
-        info(
+        logging_history = log_md(logging_history, 
             "TensorRT file found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild."
         )
+        yield logging_history
 
-    return f"Saved as {trt_path}", ""
+    yield logging_history + "\n --- \n ## Exported Successfully \n"
 
 
 def export_lora_to_trt(lora_name, force_export):
+    logging_history = ""
     is_inpaint = False
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        info("Disabling FP16 because your GPU does not support it.")
+        logging_history = log_md(logging_history, "Disabling FP16 because your GPU does not support it.")
+        yield logging_history
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
         is_inpaint = True
@@ -197,7 +219,8 @@ def export_lora_to_trt(lora_name, force_export):
         diable_optimizations = False
 
     if not os.path.exists(onnx_lora_path):
-        info("No ONNX file found. Exporting...")
+        logging_history = log_md(logging_history, "No ONNX file found. Exporting...")
+        yield logging_history
         export_onnx(
             onnx_lora_path,
             modelobj,
@@ -207,15 +230,16 @@ def export_lora_to_trt(lora_name, force_export):
             diable_optimizations=diable_optimizations,
             lora_path=lora_model["filename"],
         )
-        info("Exported to ONNX.")
+        logging_history = log_md(logging_history, "Exported to ONNX.")
+        yield logging_history
 
     trt_lora_name = onnx_lora_filename.replace(".onnx", ".trt")
     trt_lora_path = os.path.join(TRT_MODEL_DIR, trt_lora_name)
 
     available_trt_unet = modelmanager.available_models()
     if len(available_trt_unet[base_name]) == 0:
-        error("Please export the base model first.")
-        return "Failed", ""
+        logging_history = log_md(logging_history, "Please export the base model first.")
+        yield logging_history
     trt_base_path = os.path.join(
         TRT_MODEL_DIR, available_trt_unet[base_name][0]["filepath"]
     )
@@ -224,11 +248,13 @@ def export_lora_to_trt(lora_name, force_export):
         raise ValueError("Please export the base model first.")
 
     if not os.path.exists(trt_lora_path) or force_export:
-        info("No TensorRT file found. Building...")
+        logging_history = log_md(logging_history, "No TensorRT file found. Building...")
+        yield logging_history
         engine = Engine(trt_base_path)
         engine.load()
         engine.refit(onnx_base_path, onnx_lora_path, dump_refit_path=trt_lora_path)
-        info("Built TensorRT file.")
+        logging_history = log_md(logging_history, "Built TensorRT file.")
+        yield logging_history
 
         modelmanager.add_lora_entry(
             base_name,
@@ -239,7 +265,7 @@ def export_lora_to_trt(lora_name, force_export):
             0,
             unet_hidden_dim,
         )
-    return f"Saved as {trt_lora_name}", ""
+    yield logging_history + "\n --- \n ## Exported Successfully \n"
 
 
 profile_presets = {
@@ -324,7 +350,6 @@ def get_lora_checkpoints():
         if v["version"] == get_version_from_model(shared.sd_model)
     ]
 
-
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
         with gr.Row(equal_height=True):
@@ -341,13 +366,6 @@ def on_ui_tabs():
                             elem_id="sd_version",
                             default=None,
                         )
-
-                        # with FormRow(elem_classes="checkboxes-row", variant="compact"):
-                        #     is_controlnet = gr.Checkbox(
-                        #         label="Is ControlNet Model.",
-                        #         value=False,
-                        #         elem_id="trt_controlnet",
-                        #     )
 
                         with gr.Accordion("Advanced Settings", open=False):
                             with FormRow(
@@ -463,13 +481,6 @@ def on_ui_tabs():
                                     elem_id="trt_opt_token_count_max",
                                 )
 
-                            # with FormRow(
-                            #     elem_classes="checkboxes-row", variant="compact"
-                            # ):
-                            #     use_fp32 = gr.Checkbox(
-                            #         label="FP32", value=False, elem_id="trt_fp32"
-                            #     )
-
                             with FormRow(
                                 elem_classes="checkboxes-row", variant="compact"
                             ):
@@ -567,9 +578,8 @@ def on_ui_tabs():
                     trt_info = gr.Markdown(elem_id="trt_info", value=f.read())
 
         with gr.Row(equal_height=False):
-            with gr.Accordion("Output", open=False):
-                trt_result = gr.Label(elem_id="trt_result", value="", show_label=False)
-                trt_info = gr.HTML(elem_id="trt_info", value="")
+            with gr.Accordion("Output", open=True):
+                trt_result = gr.Markdown(elem_id="trt_result", value="")
 
         with gr.Row(equal_height=False):
             trt_available_models = gr.Markdown(
@@ -577,9 +587,7 @@ def on_ui_tabs():
             )
 
         button_export_unet.click(
-            wrap_gradio_gpu_call(
-                export_unet_to_trt, extra_outputs=["Conversion failed"]
-            ),
+            export_unet_to_trt,
             inputs=[
                 trt_min_batch,
                 trt_opt_batch,
@@ -596,7 +604,7 @@ def on_ui_tabs():
                 force_rebuild,
                 static_shapes,
             ],
-            outputs=[trt_result, trt_info],
+            outputs=[trt_result],
         )
 
         button_export_lora_unet.click(
@@ -604,7 +612,7 @@ def on_ui_tabs():
                 export_lora_to_trt, extra_outputs=["Conversion failed"]
             ),
             inputs=[trt_lora_dropdown, trt_lora_force_rebuild],
-            outputs=[trt_result, trt_info],
+            outputs=[trt_result],
         )
 
     return [(trt_interface, "TensorRT", "tensorrt")]
