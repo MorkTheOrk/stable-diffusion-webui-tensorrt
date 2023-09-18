@@ -53,7 +53,7 @@ class ModelManager:
         trt_filename = (
             "_".join([model_name, model_hash, self.cc, profile_hash]) + ".trt"
         )
-        trt_path = os.path.join(ONNX_MODEL_DIR, trt_filename)
+        trt_path = os.path.join(TRT_MODEL_DIR, trt_filename)
 
         return trt_filename, trt_path
 

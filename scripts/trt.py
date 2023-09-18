@@ -38,6 +38,7 @@ class TrtUnet(sd_unet.SdUnet):
         self.stream = None
         self.model_name = model_name
         self.lora_path = lora_path
+        self.engine_vram_req = 0
 
         self.loaded_config = self.configs[0]
         self.shape_hash = 0
@@ -80,7 +81,7 @@ class TrtUnet(sd_unet.SdUnet):
         if best["filepath"] == self.loaded_config["filepath"]:
             return
         self.deactivate()
-        self.engine = Engine(best["filepath"])
+        self.engine = Engine(os.path.join(TRT_MODEL_DIR, best["filepath"]))
         self.activate()
         self.loaded_config = best
 
