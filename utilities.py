@@ -31,6 +31,7 @@ from polygraphy.backend.trt import (
 import tensorrt as trt
 import torch
 from enum import Enum, auto
+from safetensors.numpy import save_file, load_file
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
@@ -102,7 +103,7 @@ class Engine:
         del self.buffers
         del self.tensors
 
-    def refit(self, onnx_path, onnx_refit_path, dump_refit=False):
+    def refit(self, onnx_path, onnx_refit_path, dump_refit_path=None):
         def convert_int64(arr):
             # TODO: smarter conversion
             if len(arr.shape) == 0:
@@ -184,6 +185,10 @@ class Engine:
                     if inp.__class__ == gs.Constant:
                         add_to_map(refit_dict, name, inp.values)
 
+        if dump_refit_path is not None:
+            save_file(refit_dict, dump_refit_path) #TODO need to come up with delta system to save only changed weights
+            return
+
         for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
             if weights_role == trt.WeightsRole.KERNEL:
                 custom_name = layer_name + "_TRTKERNEL"
@@ -204,6 +209,36 @@ class Engine:
         if not refitter.refit_cuda_engine():
             print("Failed to refit!")
             exit(0)
+
+    def refit_from_dump(self, dump_refit_path):
+        with open(dump_refit_path, "rb") as f:
+            data = f.read()
+        refit_dict = load_file(data) #TODO if deltas are used needs to be unpacked here
+
+        refitter = trt.Refitter(self.engine, TRT_LOGGER)
+        all_weights = refitter.get_all() 
+
+        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
+            if weights_role == trt.WeightsRole.KERNEL:
+                custom_name = layer_name + "_TRTKERNEL"
+            elif weights_role == trt.WeightsRole.BIAS:
+                custom_name = layer_name + "_TRTBIAS"
+            else:
+                custom_name = layer_name
+
+            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
+            if layer_name.startswith("onnx::Trilu"):
+                continue
+
+            if refit_dict[custom_name] is not None:
+                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
+            else:
+                print(f"[W] No refit weights for layer: {layer_name}")
+
+        if not refitter.refit_cuda_engine():
+            print("Failed to refit!")
+            exit(0)
+
 
     def build(
         self,

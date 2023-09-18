@@ -12,29 +12,28 @@ from modules import shared, devices
 from utilities import Engine
 import os
 
-import sys
-sys.path.append("extensions-builtin/Lora")
-import importlib
-networks = importlib.import_module("networks")
-network = importlib.import_module("network")
-lora_net = importlib.import_module("extra_networks_lora")
-
 
 def get_cc():
     cc_major = torch.cuda.get_device_properties(0).major
     cc_minor = torch.cuda.get_device_properties(0).minor
     return cc_major, cc_minor
 
-def apply_lora(model, lora_path):
-
-    a = torch.randn((2,4,64,64), dtype=torch.float16, device="cuda")
-    b = torch.randn((2), dtype=torch.float16, device="cuda")
-    c = torch.randn((2,77, 768), dtype=torch.float16, device="cuda")
-    model.forward(a, b, c)
+def apply_lora(model, lora_path, inputs):
+    try:
+        import sys
+        sys.path.append("extensions-builtin/Lora")
+        import importlib
+        networks = importlib.import_module("networks")
+        network = importlib.import_module("network")
+        lora_net = importlib.import_module("extra_networks_lora")
+    except Exception as e:
+        error(e)
+        error("Lora not found. Please install Lora extension first from ...")
+    model.forward(*inputs)
     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
     networks.load_networks([lora_name],[1.0],[1.0],[None]) # todo: UI for parameters, multiple loras -> Struct of Arrays?
     
-    model.forward(a, b, c)
+    model.forward(*inputs)
     return model
 
 def export_onnx(
@@ -70,7 +69,7 @@ def export_onnx(
             model = shared.sd_model.model.diffusion_model
 
             if lora_path:
-                model = apply_lora(model, lora_path)
+                model = apply_lora(model, lora_path, inputs)
 
             torch.onnx.export(
                 model,
