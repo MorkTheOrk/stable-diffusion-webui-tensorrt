@@ -186,7 +186,9 @@ class Engine:
                         add_to_map(refit_dict, name, inp.values)
 
         if dump_refit_path is not None:
-            save_file(refit_dict, dump_refit_path) #TODO need to come up with delta system to save only changed weights
+            save_file(
+                refit_dict, dump_refit_path
+            )  # TODO need to come up with delta system to save only changed weights
             return
 
         for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
@@ -211,12 +213,12 @@ class Engine:
             exit(0)
 
     def refit_from_dump(self, dump_refit_path):
-        with open(dump_refit_path, "rb") as f:
-            data = f.read()
-        refit_dict = load_file(data) #TODO if deltas are used needs to be unpacked here
+        refit_dict = load_file(
+            dump_refit_path
+        )  # TODO if deltas are used needs to be unpacked here
 
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all() 
+        all_weights = refitter.get_all()
 
         for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
             if weights_role == trt.WeightsRole.KERNEL:
@@ -238,7 +240,6 @@ class Engine:
         if not refitter.refit_cuda_engine():
             print("Failed to refit!")
             exit(0)
-
 
     def build(
         self,

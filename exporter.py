@@ -5,9 +5,7 @@ from logging import info, error
 import time
 import shutil
 
-
-from modules import sd_hijack, sd_unet
-from modules import shared, devices
+from modules import sd_hijack, sd_unet, shared
 
 from utilities import Engine
 import os
@@ -18,11 +16,14 @@ def get_cc():
     cc_minor = torch.cuda.get_device_properties(0).minor
     return cc_major, cc_minor
 
+
 def apply_lora(model, lora_path, inputs):
     try:
         import sys
+
         sys.path.append("extensions-builtin/Lora")
         import importlib
+
         networks = importlib.import_module("networks")
         network = importlib.import_module("network")
         lora_net = importlib.import_module("extra_networks_lora")
@@ -31,13 +32,21 @@ def apply_lora(model, lora_path, inputs):
         error("Lora not found. Please install Lora extension first from ...")
     model.forward(*inputs)
     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-    networks.load_networks([lora_name],[1.0],[1.0],[None]) # todo: UI for parameters, multiple loras -> Struct of Arrays?
-    
+    networks.load_networks(
+        [lora_name], [1.0], [1.0], [None]
+    )  # todo: UI for parameters, multiple loras -> Struct of Arrays?
+
     model.forward(*inputs)
     return model
 
+
 def export_onnx(
-    onnx_path, modelobj=None, profile=None, opset=17, diable_optimizations=False, lora_path=None
+    onnx_path,
+    modelobj=None,
+    profile=None,
+    opset=17,
+    diable_optimizations=False,
+    lora_path=None,
 ):
     swap_sdpa = hasattr(F, "scaled_dot_product_attention")
     old_sdpa = getattr(F, "scaled_dot_product_attention", None) if swap_sdpa else None

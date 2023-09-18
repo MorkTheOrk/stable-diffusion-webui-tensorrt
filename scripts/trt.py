@@ -5,39 +5,45 @@ import ldm.modules.diffusionmodules.openaimodel
 
 import torch
 
-from modules import script_callbacks, sd_unet, devices, shared, paths_internal
+from modules import script_callbacks, sd_unet, devices
 
 import ui_trt
 from utilities import Engine
-from exporter import get_cc
 from typing import List
-from ui_trt import TRTSettings, get_available_trt_unet
+from model_manager import TRT_MODEL_DIR, modelmanager
 from time import time
 
+
 class TrtUnetOption(sd_unet.SdUnetOption):
-    def __init__(self, name: str, filename: List[str]):
+    def __init__(self, name: str, filename: List[dict]):
         self.label = f"[TRT] {name}"
         self.model_name = name
-        self.filename = filename
+        self.configs = filename
 
     def create_unet(self):
-        return TrtUnet(self.filename)
+        lora_path = None
+        if self.configs[0]["config"].lora:
+            lora_path = os.path.join(TRT_MODEL_DIR, self.configs[0]["filepath"])
+            self.model_name = self.configs[0]["base_model"]
+            self.configs = modelmanager.available_models()[self.model_name]
+        return TrtUnet(self.model_name, self.configs, lora_path)
 
 
 class TrtUnet(sd_unet.SdUnet):
-    def __init__(self, filename, *args, **kwargs):
+    def __init__(
+        self, model_name: str, configs: List[dict], lora_path, *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
-        self.filename = filename
-        self.available_profiles = [TRTSettings.from_hash(p) for p in self.filename]
-        self.engine = None
+        self.configs = configs
         self.stream = None
-        self.controlnet = None
+        self.model_name = model_name
+        self.lora_path = lora_path
 
-        self.cc_major, self.cc_minor = get_cc()
-        self.shape_hash = hash(self.available_profiles[0])
-
-        self.engine = Engine(self.filename[0])
-        self.loaded_index = 0
+        self.loaded_config = self.configs[0]
+        self.shape_hash = 0
+        self.engine = Engine(
+            os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
+        )
 
     def forward(self, x, timesteps, context, *args, **kwargs):
         feed_dict = {
@@ -50,12 +56,12 @@ class TrtUnet(sd_unet.SdUnet):
 
         # Need to check compatability on the fly
         if self.shape_hash != hash(x.shape):
-            bs, _, w, h = x.shape
-            n_tokens = context.shape[1]
-            self.switch_engine(bs, h, w, n_tokens)
+            self.switch_engine(feed_dict)
             self.shape_hash = hash(x.shape)
 
-        tmp = torch.empty(self.engine_vram_req, dtype=torch.uint8, device=devices.device)
+        tmp = torch.empty(
+            self.engine_vram_req, dtype=torch.uint8, device=devices.device
+        )
         self.engine.context.device_memory = tmp.data_ptr()
         self.cudaStream = torch.cuda.current_stream().cuda_stream
         self.engine.allocate_buffers(feed_dict)
@@ -63,22 +69,20 @@ class TrtUnet(sd_unet.SdUnet):
         out = self.engine.infer(feed_dict, self.cudaStream)["latent"]
         return out
 
-    def switch_engine(self, bs, h, w, n_tokens):
-        valid = [
-            (p, i)
-            for i, p in enumerate(self.available_profiles)
-            if p.is_compatabile(bs, w, h, n_tokens)
-        ]
-        if len(valid) == 0:
-            raise ValueError("No valid profile found")
-        distances = [p.distance(bs, w, h) for p, i in valid]
-        best = valid[np.argmin(distances)][1]
-        if best == self.loaded_index:
+    def switch_engine(self, feed_dict):
+        valid_models, distances = modelmanager.get_valid_models(
+            self.model_name, feed_dict
+        )
+        if len(valid_models) == 0:
+            raise ValueError("No valid profile found.")
+
+        best = valid_models[np.argmin(distances)]
+        if best["filepath"] == self.loaded_config["filepath"]:
             return
         self.deactivate()
-        self.engine = Engine(self.filename[best])
+        self.engine = Engine(best["filepath"])
         self.activate()
-        self.loaded_index = best
+        self.loaded_config = best
 
     def activate(self):
         self.engine.load()
@@ -86,14 +90,16 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine_vram_req = self.engine.engine.device_memory_size
         self.engine.activate(True)
 
+        if self.lora_path is not None:
+            self.engine.refit_from_dump(self.lora_path)
+
     def deactivate(self):
+        self.shape_hash = 0
         del self.engine
 
 
-TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
-
 def list_unets(l):
-    model = get_available_trt_unet()
+    model = modelmanager.available_models()
     for k, v in model.items():
         l.append(TrtUnetOption(k, v))
 

@@ -300,6 +300,18 @@ class BaseModel:
             max_latent_width,
         )
 
+    def get_latent_dim(self, min_h, opt_h, max_h, min_w, opt_w, max_w, static_shape):
+        if static_shape:
+            return (
+                opt_h // 8,
+                opt_h // 8,
+                opt_h // 8,
+                opt_w // 8,
+                opt_w // 8,
+                opt_w // 8,
+            )
+        return min_h // 8, opt_h // 8, max_h // 8, min_w // 8, opt_w // 8, max_w // 8
+
 
 class CLIP(BaseModel):
     def __init__(
@@ -854,45 +866,46 @@ class OAIUNet(BaseModel):
             }
 
     def get_input_profile(
-        self, batch_size, image_height, image_width, static_batch, static_shape
+        self,
+        min_batch,
+        opt_batch,
+        max_batch,
+        min_h,
+        opt_h,
+        max_h,
+        min_w,
+        opt_w,
+        max_w,
+        static_shape,
     ):
-        latent_height, latent_width = self.check_dims(
-            batch_size, image_height, image_width
-        )
-        (
-            min_batch,
-            max_batch,
-            min_image_height,
-            max_image_height,
-            min_image_width,
-            max_image_width,
-            min_latent_height,
-            max_latent_height,
-            min_latent_width,
-            max_latent_width,
-        ) = self.get_minmax_dims(
-            batch_size, image_height, image_width, static_batch, static_shape
-        )
-
         if self.text_maxlen <= 77:
             min_batch *= 2
-            batch_size *= 2
+            opt_batch *= 2
             max_batch *= 2
         elif self.text_maxlen > 77 and not static_shape:
-            batch_size *= 2
+            opt_batch *= 2
             max_batch *= 2
+
+        (
+            min_latent_height,
+            latent_height,
+            max_latent_height,
+            min_latent_width,
+            latent_width,
+            max_latent_width,
+        ) = self.get_latent_dim(min_h, opt_h, max_h, min_w, opt_w, max_w, static_shape)
 
         if self.controlnet is None:
             return {
                 "sample": [
                     (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                    (batch_size, self.unet_dim, latent_height, latent_width),
+                    (opt_batch, self.unet_dim, latent_height, latent_width),
                     (max_batch, self.unet_dim, max_latent_height, max_latent_width),
                 ],
-                "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
+                "timesteps": [(min_batch,), (opt_batch,), (max_batch,)],
                 "encoder_hidden_states": [
                     (min_batch, self.text_optlen, self.embedding_dim),
-                    (batch_size, self.text_optlen, self.embedding_dim),
+                    (opt_batch, self.text_optlen, self.embedding_dim),
                     (max_batch, self.text_maxlen, self.embedding_dim),
                 ],
             }
@@ -900,13 +913,13 @@ class OAIUNet(BaseModel):
             return {
                 "sample": [
                     (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                    (batch_size, self.unet_dim, latent_height, latent_width),
+                    (opt_batch, self.unet_dim, latent_height, latent_width),
                     (max_batch, self.unet_dim, max_latent_height, max_latent_width),
                 ],
-                "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
+                "timesteps": [(min_batch,), (opt_batch,), (max_batch,)],
                 "encoder_hidden_states": [
                     (min_batch, self.text_optlen, self.embedding_dim),
-                    (batch_size, self.text_optlen, self.embedding_dim),
+                    (opt_batch, self.text_optlen, self.embedding_dim),
                     (max_batch, self.text_maxlen, self.embedding_dim),
                 ],
                 "images": [
@@ -914,22 +927,22 @@ class OAIUNet(BaseModel):
                         len(self.controlnet),
                         min_batch,
                         3,
-                        min_image_height,
-                        min_image_width,
+                        min_h,
+                        min_w,
                     ),
                     (
                         len(self.controlnet),
-                        batch_size,
+                        opt_batch,
                         3,
-                        image_height,
-                        image_width,
+                        opt_h,
+                        opt_w,
                     ),
                     (
                         len(self.controlnet),
                         max_batch,
                         3,
-                        max_image_height,
-                        max_image_width,
+                        max_h,
+                        max_w,
                     ),
                 ],
             }
@@ -1094,26 +1107,18 @@ class OAIUNetXL(BaseModel):
         }
 
     def get_input_profile(
-        self, batch_size, image_height, image_width, static_batch, static_shape
+        self,
+        min_batch,
+        opt_batch,
+        max_batch,
+        min_h,
+        opt_h,
+        max_h,
+        min_w,
+        opt_w,
+        max_w,
+        static_shape,
     ):
-        latent_height, latent_width = self.check_dims(
-            batch_size, image_height, image_width
-        )
-        (
-            min_batch,
-            max_batch,
-            _,
-            _,
-            _,
-            _,
-            min_latent_height,
-            max_latent_height,
-            min_latent_width,
-            max_latent_width,
-        ) = self.get_minmax_dims(
-            batch_size, image_height, image_width, static_batch, static_shape
-        )
-
         if self.text_maxlen <= 77:
             min_batch *= 2
             batch_size *= 2
@@ -1122,21 +1127,30 @@ class OAIUNetXL(BaseModel):
             batch_size *= 2
             max_batch *= 2
 
+        (
+            min_latent_height,
+            latent_height,
+            max_latent_height,
+            min_latent_width,
+            latent_width,
+            max_latent_width,
+        ) = self.get_latent_dim(min_h, opt_h, max_h, min_w, opt_w, max_w, static_shape)
+
         return {
             "sample": [
                 (min_batch, self.unet_dim, min_latent_height, min_latent_width),
-                (batch_size, self.unet_dim, latent_height, latent_width),
+                (opt_batch, self.unet_dim, latent_height, latent_width),
                 (max_batch, self.unet_dim, max_latent_height, max_latent_width),
             ],
-            "timesteps": [(min_batch,), (batch_size,), (max_batch,)],
+            "timesteps": [(min_batch,), (opt_batch,), (max_batch,)],
             "encoder_hidden_states": [
                 (min_batch, self.text_optlen, self.embedding_dim),
-                (batch_size, self.text_optlen, self.embedding_dim),
+                (opt_batch, self.text_optlen, self.embedding_dim),
                 (max_batch, self.text_maxlen, self.embedding_dim),
             ],
             "y": [
                 (min_batch, self.num_classes),
-                (batch_size, self.num_classes),
+                (opt_batch, self.num_classes),
                 (max_batch, self.num_classes),
             ],
         }
