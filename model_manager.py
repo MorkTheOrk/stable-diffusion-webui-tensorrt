@@ -67,15 +67,15 @@ class ModelManager:
             for base_model, models in base_models.items():
                 if base_model == "timing_cache":
                     continue
-                tmp_config_list = []
+                tmp_config_list = {}
                 for model_config in models:
                     if model_config["filepath"] not in trt_engines:
                         info(
                             f"Model config outdated. {model_config.filepath} was not found"
                         )
                         continue
-                    tmp_config_list.append(model_config)
-                self.all_models[cc][base_model] = tmp_config_list
+                    tmp_config_list[model_config["filepath"]] = model_config
+                self.all_models[cc][base_model] = list(tmp_config_list.values())
 
         self.write_json()
 

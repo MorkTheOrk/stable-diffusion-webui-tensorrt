@@ -30,9 +30,13 @@ from polygraphy.backend.trt import (
 )
 import tensorrt as trt
 import torch
+from torch.cuda import nvtx
 from enum import Enum, auto
 from safetensors.numpy import save_file, load_file
 from logging import error
+import os
+import sys
+from tqdm import tqdm
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
@@ -84,7 +88,53 @@ class PIPELINE_TYPE(Enum):
 
     def is_sd_xl(self):
         return self.is_sd_xl_base() or self.is_sd_xl_refiner()
+    
+class TQDMProgressMonitor(trt.IProgressMonitor):
+    def __init__(self):
+        trt.IProgressMonitor.__init__(self)
+        self._active_phases = {}
+        self._step_result = True
+        self.max_indent = 5
 
+    def phase_start(self, phase_name, parent_phase, num_steps):
+        leave = False
+        try:
+            if parent_phase is not None:
+                nbIndents = self._active_phases.get(parent_phase, {}).get('nbIndents', self.max_indent) + 1
+                if nbIndents >= self.max_indent:
+                    return
+            else:
+                nbIndents = 0
+                leave = True
+            self._active_phases[phase_name] = {"tq": tqdm(total=num_steps, desc=phase_name, leave=leave, position=nbIndents), 'nbIndents': nbIndents, "parent_phase": parent_phase}
+        except KeyboardInterrupt:
+            # The phase_start callback cannot directly cancel the build, so request the cancellation from within step_complete.
+            _step_result = False
+
+    def phase_finish(self, phase_name):
+        try:
+            if phase_name in self._active_phases.keys():
+                self._active_phases[phase_name]["tq"].update(self._active_phases[phase_name]["tq"].total - self._active_phases[phase_name]["tq"].n)
+
+                parent_phase = self._active_phases[phase_name].get("parent_phase", None)
+                while parent_phase is not None:
+                    self._active_phases[parent_phase]["tq"].refresh()
+                    parent_phase = self._active_phases[parent_phase].get("parent_phase", None)
+                if self._active_phases[phase_name]["parent_phase"] in self._active_phases.keys():
+                    self._active_phases[self._active_phases[phase_name]["parent_phase"]]["tq"].refresh()
+                del self._active_phases[phase_name]
+            pass
+        except KeyboardInterrupt:
+            _step_result = False
+
+    def step_complete(self, phase_name, step):
+        try:
+            if phase_name in self._active_phases.keys():
+                self._active_phases[phase_name]["tq"].update(step - self._active_phases[phase_name]["tq"].n)
+            return self._step_result
+        except KeyboardInterrupt:
+            # There is no need to propagate this exception to TensorRT. We can simply cancel the build.
+            return False
 
 class Engine:
     def __init__(
@@ -281,16 +331,25 @@ class Engine:
         if update_output_names:
             print(f"Updating network outputs to {update_output_names}")
             network = ModifyNetworkOutputs(network, update_output_names)
-        engine = engine_from_network(
-            network,
-            config=CreateConfig(
+
+        if not sys.stdout.isatty():
+            print("ERROR: This sample must be run from an interactive terminal.")
+            sys.exit(1)
+
+        # progress_monitor = TQDMProgressMonitor(),
+        
+        config=CreateConfig(
                 fp16=fp16,
                 refittable=enable_refit,
                 profiles=p,
                 load_timing_cache=timing_cache,
                 profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
                 **config_kwargs,
-            ),
+        )
+        
+        engine = engine_from_network(
+            network,
+            config,
             save_timing_cache=timing_cache,
         )
         save_engine(engine, path=self.engine_path)
@@ -307,6 +366,7 @@ class Engine:
             self.context = self.engine.create_execution_context()
 
     def allocate_buffers(self, shape_dict=None, device="cuda"):
+        nvtx.range_push("allocate_buffers")
         for idx in range(self.engine.num_io_tensors):
             binding = self.engine[idx]
             if shape_dict and binding in shape_dict:
@@ -320,18 +380,21 @@ class Engine:
                 tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]
             ).to(device=device)
             self.tensors[binding] = tensor
+        nvtx.range_pop()
 
     def infer(self, feed_dict, stream, use_cuda_graph=False):
+        nvtx.range_push("set_tensors")
         for name, buf in feed_dict.items():
             self.tensors[name].copy_(buf)
 
         for name, tensor in self.tensors.items():
             self.context.set_tensor_address(name, tensor.data_ptr())
-
+        nvtx.range_pop()
+        nvtx.range_push("execute")
         noerror = self.context.execute_async_v3(stream)
         if not noerror:
             raise ValueError(f"ERROR: inference failed.")
-
+        nvtx.range_pop()
         return self.tensors
 
     def __str__(self):

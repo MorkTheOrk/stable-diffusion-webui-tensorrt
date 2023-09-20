@@ -4,7 +4,7 @@ import numpy as np
 import ldm.modules.diffusionmodules.openaimodel
 
 import torch
-
+from torch.cuda import nvtx
 from modules import script_callbacks, sd_unet, devices
 
 import ui_trt
@@ -47,6 +47,7 @@ class TrtUnet(sd_unet.SdUnet):
         )
 
     def forward(self, x, timesteps, context, *args, **kwargs):
+        nvtx.range_push("forward")
         feed_dict = {
             "sample": x.float(),
             "timesteps": timesteps.float(),
@@ -57,12 +58,14 @@ class TrtUnet(sd_unet.SdUnet):
 
         # Need to check compatability on the fly
         if self.shape_hash != hash(x.shape):
+            nvtx.range_push("switch_engine")
             if x.shape[-1] % 8 or x.shape[-2] % 8:
                 raise ValueError(
                     "Input shape must be divisible by 64 in both dimensions."
                 )
             self.switch_engine(feed_dict)
             self.shape_hash = hash(x.shape)
+            nvtx.range_pop()
 
         tmp = torch.empty(
             self.engine_vram_req, dtype=torch.uint8, device=devices.device
@@ -72,6 +75,8 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine.allocate_buffers(feed_dict)
 
         out = self.engine.infer(feed_dict, self.cudaStream)["latent"]
+
+        nvtx.range_pop()
         return out
 
     def switch_engine(self, feed_dict):
