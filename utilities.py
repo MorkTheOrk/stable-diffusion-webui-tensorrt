@@ -88,7 +88,8 @@ class PIPELINE_TYPE(Enum):
 
     def is_sd_xl(self):
         return self.is_sd_xl_base() or self.is_sd_xl_refiner()
-    
+
+
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):
         trt.IProgressMonitor.__init__(self)
@@ -100,13 +101,24 @@ class TQDMProgressMonitor(trt.IProgressMonitor):
         leave = False
         try:
             if parent_phase is not None:
-                nbIndents = self._active_phases.get(parent_phase, {}).get('nbIndents', self.max_indent) + 1
+                nbIndents = (
+                    self._active_phases.get(parent_phase, {}).get(
+                        "nbIndents", self.max_indent
+                    )
+                    + 1
+                )
                 if nbIndents >= self.max_indent:
                     return
             else:
                 nbIndents = 0
                 leave = True
-            self._active_phases[phase_name] = {"tq": tqdm(total=num_steps, desc=phase_name, leave=leave, position=nbIndents), 'nbIndents': nbIndents, "parent_phase": parent_phase}
+            self._active_phases[phase_name] = {
+                "tq": tqdm(
+                    total=num_steps, desc=phase_name, leave=leave, position=nbIndents
+                ),
+                "nbIndents": nbIndents,
+                "parent_phase": parent_phase,
+            }
         except KeyboardInterrupt:
             # The phase_start callback cannot directly cancel the build, so request the cancellation from within step_complete.
             _step_result = False
@@ -114,14 +126,24 @@ class TQDMProgressMonitor(trt.IProgressMonitor):
     def phase_finish(self, phase_name):
         try:
             if phase_name in self._active_phases.keys():
-                self._active_phases[phase_name]["tq"].update(self._active_phases[phase_name]["tq"].total - self._active_phases[phase_name]["tq"].n)
+                self._active_phases[phase_name]["tq"].update(
+                    self._active_phases[phase_name]["tq"].total
+                    - self._active_phases[phase_name]["tq"].n
+                )
 
                 parent_phase = self._active_phases[phase_name].get("parent_phase", None)
                 while parent_phase is not None:
                     self._active_phases[parent_phase]["tq"].refresh()
-                    parent_phase = self._active_phases[parent_phase].get("parent_phase", None)
-                if self._active_phases[phase_name]["parent_phase"] in self._active_phases.keys():
-                    self._active_phases[self._active_phases[phase_name]["parent_phase"]]["tq"].refresh()
+                    parent_phase = self._active_phases[parent_phase].get(
+                        "parent_phase", None
+                    )
+                if (
+                    self._active_phases[phase_name]["parent_phase"]
+                    in self._active_phases.keys()
+                ):
+                    self._active_phases[
+                        self._active_phases[phase_name]["parent_phase"]
+                    ]["tq"].refresh()
                 del self._active_phases[phase_name]
             pass
         except KeyboardInterrupt:
@@ -130,11 +152,14 @@ class TQDMProgressMonitor(trt.IProgressMonitor):
     def step_complete(self, phase_name, step):
         try:
             if phase_name in self._active_phases.keys():
-                self._active_phases[phase_name]["tq"].update(step - self._active_phases[phase_name]["tq"].n)
+                self._active_phases[phase_name]["tq"].update(
+                    step - self._active_phases[phase_name]["tq"].n
+                )
             return self._step_result
         except KeyboardInterrupt:
             # There is no need to propagate this exception to TensorRT. We can simply cancel the build.
             return False
+
 
 class Engine:
     def __init__(
@@ -246,6 +271,7 @@ class Engine:
                         add_to_map(refit_dict, name, inp.values)
 
         if dump_refit_path is not None:
+            print("Finished refit. Dumping result to disk.")
             save_file(
                 refit_dict, dump_refit_path
             )  # TODO need to come up with delta system to save only changed weights
@@ -337,16 +363,16 @@ class Engine:
             sys.exit(1)
 
         # progress_monitor = TQDMProgressMonitor(),
-        
-        config=CreateConfig(
-                fp16=fp16,
-                refittable=enable_refit,
-                profiles=p,
-                load_timing_cache=timing_cache,
-                profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
-                **config_kwargs,
+
+        config = CreateConfig(
+            fp16=fp16,
+            refittable=enable_refit,
+            profiles=p,
+            load_timing_cache=timing_cache,
+            profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
+            **config_kwargs,
         )
-        
+
         engine = engine_from_network(
             network,
             config,

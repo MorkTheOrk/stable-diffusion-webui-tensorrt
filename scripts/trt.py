@@ -84,7 +84,9 @@ class TrtUnet(sd_unet.SdUnet):
             self.model_name, feed_dict
         )
         if len(valid_models) == 0:
-            raise ValueError("No valid profile found.")
+            raise ValueError(
+                "No valid profile found. Please exort a TensorRT engine with the necessary profile. Or use the default (torch) U-Net."
+            )
 
         best = valid_models[np.argmin(distances)]
         if best["filepath"] == self.loaded_config["filepath"]:

@@ -15,6 +15,7 @@ import gc
 import torch
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
 from time import sleep
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,15 +28,18 @@ def get_version_from_model(sd_model):
     if sd_model.is_sdxl:
         return "xl-1.0"
 
+
 class LogLevel:
     Debug = 0
     Info = 1
     Warning = 2
     Error = 3
 
+
 def log_md(logging_history, message, prefix="**[INFO]:**"):
     logging_history += f"{prefix} {message} \n"
     return logging_history
+
 
 def export_unet_to_trt(
     batch_min,
@@ -60,7 +64,9 @@ def export_unet_to_trt(
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        logging_history = log_md(logging_history, "Disabling FP16 because your GPU does not support it.")
+        logging_history = log_md(
+            logging_history, "Disabling FP16 because your GPU does not support it."
+        )
         yield logging_history
 
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
@@ -71,7 +77,9 @@ def export_unet_to_trt(
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     onnx_filename, onnx_path = modelmanager.get_onnx_path(model_name, model_hash)
 
-    logging_history = log_md(logging_history, f"Exporting {model_name} to TensorRT", prefix="###")
+    logging_history = log_md(
+        logging_history, f"Exporting {model_name} to TensorRT", prefix="###"
+    )
     yield logging_history
 
     timing_cache = modelmanager.get_timing_cache(allow_remote=False)
@@ -136,7 +144,10 @@ def export_unet_to_trt(
     )
 
     if not os.path.exists(trt_path) or force_export:
-        logging_history = log_md(logging_history, "No TensorRT file found. Building... This can take a while.")
+        logging_history = log_md(
+            logging_history,
+            "No TensorRT engine found. Building... This can take a while, please check the progress in the terminal.",
+        )
         yield logging_history
         gc.collect()
         torch.cuda.empty_cache()
@@ -147,7 +158,9 @@ def export_unet_to_trt(
             profile=profile,
             use_fp16=not use_fp32,
         )
-        logging_history = log_md(logging_history, "Built TensorRT file.")
+        logging_history = log_md(
+            logging_history, "TensorRT engines has been saved to disk."
+        )
         yield logging_history
         modelmanager.add_entry(
             model_name,
@@ -162,8 +175,9 @@ def export_unet_to_trt(
             lora=False,
         )  # TODO vram?
     else:
-        logging_history = log_md(logging_history, 
-            "TensorRT file found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild."
+        logging_history = log_md(
+            logging_history,
+            "TensorRT engine found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild.",
         )
         yield logging_history
 
@@ -176,7 +190,9 @@ def export_lora_to_trt(lora_name, force_export):
     use_fp32 = False
     if cc_major < 7:
         use_fp32 = True
-        logging_history = log_md(logging_history, "Disabling FP16 because your GPU does not support it.")
+        logging_history = log_md(
+            logging_history, "Disabling FP16 because your GPU does not support it."
+        )
         yield logging_history
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
@@ -186,6 +202,8 @@ def export_lora_to_trt(lora_name, force_export):
     model_name = shared.sd_model.sd_checkpoint_info.model_name
     base_name = f"{model_name}_{model_hash}"
 
+    available_lora_models = get_lora_checkpoints()
+    lora_name = lora_name.split(" ")[0]
     lora_model = available_lora_models[lora_name]
 
     onnx_base_filename, onnx_base_path = modelmanager.get_onnx_path(
@@ -248,12 +266,12 @@ def export_lora_to_trt(lora_name, force_export):
         raise ValueError("Please export the base model first.")
 
     if not os.path.exists(trt_lora_path) or force_export:
-        logging_history = log_md(logging_history, "No TensorRT file found. Building...")
+        logging_history = log_md(logging_history, "No TensorRT engine found. Building...")
         yield logging_history
         engine = Engine(trt_base_path)
         engine.load()
         engine.refit(onnx_base_path, onnx_lora_path, dump_refit_path=trt_lora_path)
-        logging_history = log_md(logging_history, "Built TensorRT file.")
+        logging_history = log_md(logging_history, "Built TensorRT engine.")
         yield logging_history
 
         modelmanager.add_lora_entry(
@@ -272,9 +290,22 @@ profile_presets = {
     "512x512 (Static)": (1, 1, 1, 512, 512, 512, 512, 512, 512, 75, 75, 75),
     "768x768 (Static)": (1, 1, 1, 768, 768, 768, 768, 768, 768, 75, 75, 75),
     "1024x1024 (Static)": (1, 1, 1, 1024, 1024, 1024, 1024, 1024, 1024, 75, 75, 75),
-    "512x512 (Dynamic)": (1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150),
-    "768x768 (Dynamic)": (1, 1, 1, 512, 768, 1024, 512, 768, 1024, 75, 75, 150),
-    "1024x1024 (Dynamic)": (1, 1, 1, 512, 1024, 1536, 512, 1024, 1536, 75, 75, 150),
+    "256x256 - 512x512 (Dynamic)": (1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150),
+    "512x512 - 768x768 (Dynamic)": (1, 1, 1, 512, 768, 768, 512, 768, 768, 75, 75, 150),
+    "768x768 - 1024x1024 (Dynamic)": (
+        1,
+        1,
+        1,
+        512,
+        1024,
+        1024,
+        512,
+        1024,
+        1024,
+        75,
+        75,
+        150,
+    ),
 }
 
 
@@ -299,21 +330,81 @@ def diable_visibility(hide):
 
 
 def engine_profile_card():
+    def get_md_table(
+        h_min,
+        h_opt,
+        h_max,
+        w_min,
+        w_opt,
+        w_max,
+        b_min,
+        b_opt,
+        b_max,
+        t_min,
+        t_opt,
+        t_max,
+    ):
+        md_table = (
+            "|             	|   Min   	|   Opt   	|   Max   	| \n"
+            "|-------------	|:-------:	|:-------:	|:-------:	| \n"
+            "| Height      	| {h_min} 	| {h_opt} 	| {h_max} 	| \n"
+            "| Width       	| {w_min} 	| {w_opt} 	| {w_max} 	| \n"
+            "| Batch Size  	| {b_min} 	| {b_opt} 	| {b_max} 	| \n"
+            "| Text-length 	| {t_min} 	| {t_opt} 	| {t_max} 	| \n"
+        )
+        return md_table.format(
+            h_min=h_min,
+            h_opt=h_opt,
+            h_max=h_max,
+            w_min=w_min,
+            w_opt=w_opt,
+            w_max=w_max,
+            b_min=b_min,
+            b_opt=b_opt,
+            b_max=b_max,
+            t_min=t_min,
+            t_opt=t_opt,
+            t_max=t_max,
+        )
+
     available_models = modelmanager.available_models()
-    out_string = "## Available TensorRT Models \n"
+
+    model_md = defaultdict(list)
+    loras_md = {}
     for base_model, models in available_models.items():
-        markdown_string = f"### Model: {base_model} \n"
         for i, m in enumerate(models):
             if m["config"].lora:
+                loras_md[base_model] = m.get("base_model", None)
                 continue
-            markdown_string += f"#### Profile {i} \n"
-            for dim, profile in m["config"].profile.items():
-                markdown_string += " - **{}:** {} \n".format(dim, str(profile))
-            markdown_string += "\n"
-        out_string += markdown_string
-        out_string += "\n --- \n"
+
+            s_min, s_opt, s_max = m["config"].profile.get(
+                "sample", [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+            )
+            t_min, t_opt, t_max = m["config"].profile.get(
+                "encoder_hidden_states", [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+            )
+            profile_table = get_md_table(
+                s_min[2] * 8,
+                s_opt[2] * 8,
+                s_max[2] * 8,
+                s_min[3] * 8,
+                s_opt[3] * 8,
+                s_max[3] * 8,
+                s_min[0] // 2,
+                s_opt[0] // 2,
+                s_max[0] // 2,
+                (t_min[1] // 77) * 75,
+                (t_opt[1] // 77) * 75,
+                (t_max[1] // 77) * 75,
+            )
+
+            model_md[base_model].append(profile_table)
+
+    for lora, base_model in loras_md.items():
+        model_md[lora] = model_md[base_model]
+
     # print(out_string)
-    return out_string
+    return model_md
 
 
 def get_version_from_filename(name):
@@ -327,10 +418,8 @@ def get_version_from_filename(name):
         return "Unknown"
 
 
-available_lora_models = {}
-
-
 def get_lora_checkpoints():
+    available_lora_models = {}
     canditates = list(
         shared.walk_files(
             shared.cmd_opts.lora_dir,
@@ -342,13 +431,20 @@ def get_lora_checkpoints():
         metadata = sd_models.read_metadata_from_safetensors(filename)
         available_lora_models[name] = {
             "filename": filename,
-            "version": get_version_from_filename(metadata["ss_sd_model_name"]),
+            "version": get_version_from_filename(metadata.get("ss_sd_model_name")),
         }
+    return available_lora_models
+
+
+def get_valid_lora_checkpoints():
+    available_lora_models = get_lora_checkpoints()
     return [
-        k
+        f"{k} ({v['version']})"
         for k, v in available_lora_models.items()
         if v["version"] == get_version_from_model(shared.sd_model)
+        or v["version"] == "Unknown"
     ]
+
 
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as trt_interface:
@@ -541,7 +637,7 @@ def on_ui_tabs():
                         )
 
                         trt_lora_dropdown = gr.Dropdown(
-                            choices=get_lora_checkpoints(),
+                            choices=get_valid_lora_checkpoints(),
                             elem_id="lora_model",
                             label="LoRA Model",
                             default=None,
@@ -562,7 +658,7 @@ def on_ui_tabs():
                         )
 
                         lora_refresh_button.click(
-                            get_lora_checkpoints,
+                            get_valid_lora_checkpoints,
                             None,
                             trt_lora_dropdown,
                         )
@@ -581,10 +677,22 @@ def on_ui_tabs():
             with gr.Accordion("Output", open=True):
                 trt_result = gr.Markdown(elem_id="trt_result", value="")
 
-        with gr.Row(equal_height=False):
-            trt_available_models = gr.Markdown(
-                elem_id="trt_available_models", value=engine_profile_card()
-            )
+        with gr.Column(variant="panel"):
+            with gr.Row(equal_height=False):
+                gr.Markdown(
+                    elem_id=f"trt_available_model_profiles",
+                    value=f"## Available TensorRT engine-profiles",
+                )
+                engines_md = engine_profile_card()
+            for model, profiles in engines_md.items():
+                with gr.Row(equal_height=False):
+                    with gr.Accordion(model, open=False):
+                        out_string = ""
+                        for i, profile in enumerate(profiles):
+                            out_string += f"#### Profile {i} \n"
+                            out_string += profile
+                            out_string += "\n\n"
+                        gr.Markdown(elem_id=f"trt_{model}_{i}", value=out_string)
 
         button_export_unet.click(
             export_unet_to_trt,
@@ -608,9 +716,7 @@ def on_ui_tabs():
         )
 
         button_export_lora_unet.click(
-            wrap_gradio_gpu_call(
-                export_lora_to_trt, extra_outputs=["Conversion failed"]
-            ),
+            export_lora_to_trt,
             inputs=[trt_lora_dropdown, trt_lora_force_rebuild],
             outputs=[trt_result],
         )
