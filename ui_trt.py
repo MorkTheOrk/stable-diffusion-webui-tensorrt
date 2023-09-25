@@ -151,13 +151,16 @@ def export_unet_to_trt(
         yield logging_history
         gc.collect()
         torch.cuda.empty_cache()
-        export_trt(
+        ret = export_trt(
             trt_path,
             onnx_path,
             timing_cache,
             profile=profile,
             use_fp16=not use_fp32,
         )
+        if ret:
+            yield logging_history + "\n --- \n ## Export Failed due to unknown reason. See shell for more information. \n"
+            return
         logging_history = log_md(
             logging_history, "TensorRT engines has been saved to disk."
         )
@@ -200,7 +203,7 @@ def export_lora_to_trt(lora_name, force_export):
 
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
-    base_name = f"{model_name}_{model_hash}"
+    base_name = f"{model_name}"  # _{model_hash}
 
     available_lora_models = get_lora_checkpoints()
     lora_name = lora_name.split(" ")[0]
@@ -266,7 +269,9 @@ def export_lora_to_trt(lora_name, force_export):
         raise ValueError("Please export the base model first.")
 
     if not os.path.exists(trt_lora_path) or force_export:
-        logging_history = log_md(logging_history, "No TensorRT engine found. Building...")
+        logging_history = log_md(
+            logging_history, "No TensorRT engine found. Building..."
+        )
         yield logging_history
         engine = Engine(trt_base_path)
         engine.load()
@@ -287,15 +292,80 @@ def export_lora_to_trt(lora_name, force_export):
 
 
 profile_presets = {
-    "512x512 (Static)": (1, 1, 1, 512, 512, 512, 512, 512, 512, 75, 75, 75),
-    "768x768 (Static)": (1, 1, 1, 768, 768, 768, 768, 768, 768, 75, 75, 75),
-    "1024x1024 (Static)": (1, 1, 1, 1024, 1024, 1024, 1024, 1024, 1024, 75, 75, 75),
-    "256x256 - 512x512 (Dynamic)": (1, 1, 1, 256, 512, 512, 256, 512, 512, 75, 75, 150),
-    "512x512 - 768x768 (Dynamic)": (1, 1, 1, 512, 768, 768, 512, 768, 768, 75, 75, 150),
-    "768x768 - 1024x1024 (Dynamic)": (
+    "512x512 | Batch Size 1 (Static)": (
         1,
         1,
         1,
+        512,
+        512,
+        512,
+        512,
+        512,
+        512,
+        75,
+        75,
+        75,
+    ),
+    "768x768 | Batch Size 1 (Static)": (
+        1,
+        1,
+        1,
+        768,
+        768,
+        768,
+        768,
+        768,
+        768,
+        75,
+        75,
+        75,
+    ),
+    "1024x1024 | Batch Size 1 (Static)": (
+        1,
+        1,
+        1,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        75,
+        75,
+        75,
+    ),
+    "256x256 - 512x512 | Batch Size 1-2 (Dynamic)": (
+        1,
+        1,
+        2,
+        256,
+        512,
+        512,
+        256,
+        512,
+        512,
+        75,
+        75,
+        150,
+    ),
+    "512x512 - 768x768 | Batch Size 1-2 (Dynamic)": (
+        1,
+        1,
+        2,
+        512,
+        512,
+        768,
+        512,
+        512,
+        768,
+        75,
+        75,
+        150,
+    ),
+    "768x768 - 1024x1024 | Batch Size 1-2 (Dynamic)": (
+        1,
+        1,
+        2,
         512,
         1024,
         1024,
@@ -390,9 +460,9 @@ def engine_profile_card():
                 s_min[3] * 8,
                 s_opt[3] * 8,
                 s_max[3] * 8,
-                s_min[0] // 2,
-                s_opt[0] // 2,
-                s_max[0] // 2,
+                max(s_min[0] // 2, 1),
+                max(s_opt[0] // 2, 1),
+                max(s_max[0] // 2, 1),
                 (t_min[1] // 77) * 75,
                 (t_opt[1] // 77) * 75,
                 (t_max[1] // 77) * 75,
@@ -403,7 +473,6 @@ def engine_profile_card():
     for lora, base_model in loras_md.items():
         model_md[lora] = model_md[base_model]
 
-    # print(out_string)
     return model_md
 
 
@@ -456,11 +525,14 @@ def on_ui_tabs():
                             value="# TensorRT Exporter",
                         )
 
+                        default_version = list(profile_presets.keys())[-2]
+                        default_vals = list(profile_presets.values())[-2]
                         version = gr.Dropdown(
                             label="Preset",
                             choices=list(profile_presets.keys()),
                             elem_id="sd_version",
-                            default=None,
+                            default=default_version,
+                            value=default_version
                         )
 
                         with gr.Accordion("Advanced Settings", open=False):
@@ -469,113 +541,114 @@ def on_ui_tabs():
                             ):
                                 static_shapes = gr.Checkbox(
                                     label="Use static shapes.",
-                                    value=True,
+                                    value=default_vals[-1],
                                     elem_id="trt_static_shapes",
                                 )
 
-                            with gr.Column(elem_id="trt_width"):
-                                trt_width_opt = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Optimal width",
-                                    value=512,
-                                    elem_id="trt_opt_width",
-                                )
-                                trt_width_min = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Min width",
-                                    value=256,
-                                    elem_id="trt_min_width",
-                                )
-                                trt_width_max = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Max width",
-                                    value=768,
-                                    elem_id="trt_max_width",
-                                )
-
-                            with gr.Column(elem_id="trt_height"):
-                                trt_height_opt = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Optimal height",
-                                    value=512,
-                                    elem_id="trt_opt_height",
-                                )
-                                trt_height_min = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Min height",
-                                    value=256,
-                                    elem_id="trt_min_height",
-                                )
-                                trt_height_max = gr.Slider(
-                                    minimum=256,
-                                    maximum=2048,
-                                    step=64,
-                                    label="Max height",
-                                    value=768,
-                                    elem_id="trt_max_height",
-                                )
-
                             with gr.Column(elem_id="trt_max_batch"):
-                                trt_opt_batch = gr.Slider(
-                                    minimum=1,
-                                    maximum=16,
-                                    step=1,
-                                    label="Optimal batch-size",
-                                    value=1,
-                                    elem_id="trt_opt_batch",
-                                )
                                 trt_min_batch = gr.Slider(
                                     minimum=1,
                                     maximum=16,
                                     step=1,
                                     label="Min batch-size",
-                                    value=1,
+                                    value=default_vals[0],
                                     elem_id="trt_min_batch",
+                                )
+                                trt_opt_batch = gr.Slider(
+                                    minimum=1,
+                                    maximum=16,
+                                    step=1,
+                                    label="Optimal batch-size",
+                                    value=default_vals[1],
+                                    elem_id="trt_opt_batch",
                                 )
                                 trt_max_batch = gr.Slider(
                                     minimum=1,
                                     maximum=16,
                                     step=1,
                                     label="Max batch-size",
-                                    value=1,
+                                    value=default_vals[2],
                                     elem_id="trt_max_batch",
                                 )
 
-                            with gr.Column(elem_id="trt_token_count"):
-                                trt_token_count_opt = gr.Slider(
-                                    minimum=75,
-                                    maximum=750,
-                                    step=75,
-                                    label="Optimal prompt token count",
-                                    value=75,
-                                    elem_id="trt_opt_token_count_opt",
+                            with gr.Column(elem_id="trt_height"):
+                                trt_height_min = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Min height",
+                                    value=default_vals[3],
+                                    elem_id="trt_min_height",
                                 )
+                                trt_height_opt = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Optimal height",
+                                    value=default_vals[4],
+                                    elem_id="trt_opt_height",
+                                )
+                                trt_height_max = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Max height",
+                                    value=default_vals[5],
+                                    elem_id="trt_max_height",
+                                )
+
+                            with gr.Column(elem_id="trt_width"):
+                                trt_width_min = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Min width",
+                                    value=default_vals[6],
+                                    elem_id="trt_min_width",
+                                )
+                                trt_width_opt = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Optimal width",
+                                    value=default_vals[7],
+                                    elem_id="trt_opt_width",
+                                )
+                                trt_width_max = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    label="Max width",
+                                    value=default_vals[8],
+                                    elem_id="trt_max_width",
+                                )
+
+                            with gr.Column(elem_id="trt_token_count"):
                                 trt_token_count_min = gr.Slider(
                                     minimum=75,
                                     maximum=750,
                                     step=75,
                                     label="Min prompt token count",
-                                    value=75,
+                                    value=default_vals[9],
                                     elem_id="trt_opt_token_count_min",
+                                )
+                                trt_token_count_opt = gr.Slider(
+                                    minimum=75,
+                                    maximum=750,
+                                    step=75,
+                                    label="Optimal prompt token count",
+                                    value=default_vals[10],
+                                    elem_id="trt_opt_token_count_opt",
                                 )
                                 trt_token_count_max = gr.Slider(
                                     minimum=75,
                                     maximum=750,
                                     step=75,
                                     label="Max prompt token count",
-                                    value=150,
+                                    value=default_vals[11],
                                     elem_id="trt_opt_token_count_max",
                                 )
+
 
                             with FormRow(
                                 elem_classes="checkboxes-row", variant="compact"
@@ -590,7 +663,7 @@ def on_ui_tabs():
                             value="Convert Unet to TensorRT",
                             variant="primary",
                             elem_id="trt_export_unet",
-                            visible=False,
+                            visible=True,
                         )
 
                         version.change(
@@ -612,7 +685,7 @@ def on_ui_tabs():
                                 static_shapes,
                             ],
                         )
-                        version.change(diable_export, version, button_export_unet)
+                        # version.change(diable_export, version, button_export_unet)
                         static_shapes.change(
                             diable_visibility,
                             static_shapes,
@@ -686,7 +759,8 @@ def on_ui_tabs():
                 engines_md = engine_profile_card()
             for model, profiles in engines_md.items():
                 with gr.Row(equal_height=False):
-                    with gr.Accordion(model, open=False):
+                    row_name = model + " ({} Profiles)".format(len(profiles))
+                    with gr.Accordion(row_name, open=False):
                         out_string = ""
                         for i, profile in enumerate(profiles):
                             out_string += f"#### Profile {i} \n"

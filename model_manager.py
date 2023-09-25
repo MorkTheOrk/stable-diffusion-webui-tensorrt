@@ -102,7 +102,7 @@ class ModelManager:
             model_name, model_hash, profile, static_shapes
         )
 
-        base_model_name = f"{model_name}_{model_hash}"
+        base_model_name = f"{model_name}" # _{model_hash}
         if self.cc not in self.all_models:
             self.all_models[self.cc] = {}
 

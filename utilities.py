@@ -21,6 +21,7 @@ import numpy as np
 import onnx
 import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
+from polygraphy import util
 from polygraphy.backend.trt import CreateConfig, ModifyNetworkOutputs, Profile
 from polygraphy.backend.trt import (
     engine_from_bytes,
@@ -37,6 +38,7 @@ from logging import error
 import os
 import sys
 from tqdm import tqdm
+import copy 
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 
@@ -358,27 +360,60 @@ class Engine:
             print(f"Updating network outputs to {update_output_names}")
             network = ModifyNetworkOutputs(network, update_output_names)
 
-        if not sys.stdout.isatty():
-            print("ERROR: This sample must be run from an interactive terminal.")
-            sys.exit(1)
+        builder = network[0]
+        config = builder.create_builder_config()
+        config.progress_monitor = TQDMProgressMonitor()
 
-        # progress_monitor = TQDMProgressMonitor(),
+        config.set_flag(trt.BuilderFlag.FP16) if fp16 else None
+        config.set_flag(trt.BuilderFlag.REFIT) if enable_refit else None
 
-        config = CreateConfig(
-            fp16=fp16,
-            refittable=enable_refit,
-            profiles=p,
-            load_timing_cache=timing_cache,
-            profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
-            **config_kwargs,
-        )
+        cache = None
+        try:
+            with util.LockFile(timing_cache):
+                timing_cache_data = util.load_file(
+                    timing_cache, description="tactic timing cache"
+                )
+                cache = config.create_timing_cache(timing_cache_data)
+        except FileNotFoundError:
+            error(
+                "Timing cache file {} not found, falling back to empty timing cache.".format(
+                    timing_cache
+                )
+            )
+            return 1
+        if cache is not None:
+            config.set_timing_cache(cache, ignore_mismatch=False)
 
-        engine = engine_from_network(
-            network,
-            config,
-            save_timing_cache=timing_cache,
-        )
-        save_engine(engine, path=self.engine_path)
+        profiles = copy.deepcopy(p)
+        for profile in profiles:
+            # Last profile is used for set_calibration_profile.
+            calib_profile = profile.fill_defaults(network[1]).to_trt(builder, network[1])
+            config.add_optimization_profile(calib_profile)
+
+
+        # config = CreateConfig(
+        #     fp16=fp16,
+        #     refittable=enable_refit,
+        #     profiles=p,
+        #     load_timing_cache=timing_cache,
+        #     profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
+        #     **config_kwargs,
+        # )
+        try:
+            engine = engine_from_network(
+                network,
+                config,
+                save_timing_cache=timing_cache,
+            )
+        except Exception as e:
+            error(f"Failed to build engine: {e}")
+            return 1
+        try:
+            save_engine(engine, path=self.engine_path)
+        except Exception as e:
+            error(f"Failed to save engine: {e}")
+            return 1
+        return 0
 
     def load(self):
         print(f"Loading TensorRT engine: {self.engine_path}")
