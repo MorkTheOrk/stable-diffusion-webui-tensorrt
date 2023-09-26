@@ -65,8 +65,6 @@ class ModelManager:
         ]
         for cc, base_models in self.all_models.items():
             for base_model, models in base_models.items():
-                if base_model == "timing_cache":
-                    continue
                 tmp_config_list = {}
                 for model_config in models:
                     if model_config["filepath"] not in trt_engines:
@@ -102,7 +100,7 @@ class ModelManager:
             model_name, model_hash, profile, static_shapes
         )
 
-        base_model_name = f"{model_name}" # _{model_hash}
+        base_model_name = f"{model_name}"  # _{model_hash}
         if self.cc not in self.all_models:
             self.all_models[self.cc] = {}
 
@@ -147,8 +145,6 @@ class ModelManager:
 
         for cc, models in out.items():
             for base_model, configs in models.items():
-                if "timing_cache" in base_model:
-                    continue
                 for i in range(len(configs)):
                     out[cc][base_model][i]["config"] = ModelConfig(
                         **configs[i]["config"]
@@ -157,22 +153,19 @@ class ModelManager:
 
     def available_models(self):
         available = self.all_models.get(self.cc, {})
-        available.pop("timing_cache", None)
         return available
 
-    def get_timing_cache(self, allow_remote=False):
-        available = self.all_models.get(self.cc, {})
-        cache = available.pop(
-            "timing_cache",
-            {
-                "filepath": os.path.join(
-                    TRT_MODEL_DIR, f"timing_cache_{self.cc}.cache"
-                ),
-                "from_remote": allow_remote,
-            },
+    def get_timing_cache(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        cache = os.path.join(
+            current_dir,
+            "timing_caches",
+            "timing_cache_{}_{}.cache".format(
+                "win" if os.name == "nt" else "linux", self.cc
+            ),
         )
-        get_trt_cache(cache["filepath"], allow_remote, False)
-        return cache["filepath"]
+
+        return cache
 
     def get_valid_models(self, base_model: str, feed_dict: dict):
         valid_models = []
@@ -215,26 +208,6 @@ class ModelConfig:
 class ModelConfigEncoder(JSONEncoder):
     def default(self, o: ModelConfig):
         return o.__dict__
-
-
-def get_trt_cache(
-    cache_path, enable_remote=False, force_download=False
-):  # feature disabled
-    cache_name = os.path.basename(cache_path)
-    if not os.path.isfile(cache_path) and enable_remote or force_download:
-        import requests
-
-        download_url = f"{NVIDIA_CACHE_URL}/{cache_name}"
-        r = requests.get(url=download_url)
-        if r.ok:
-            open(cache_path, "wb").write(r.content)
-            return cache_path
-        else:
-            raise RuntimeWarning(
-                "Warning! Could not download remote cache file, falling back.(Status Code {r.status_code})"
-            )
-    else:
-        return cache_path
 
 
 modelmanager = ModelManager()

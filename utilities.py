@@ -34,7 +34,7 @@ import torch
 from torch.cuda import nvtx
 from enum import Enum, auto
 from safetensors.numpy import save_file, load_file
-from logging import error
+from logging import error, warning
 import os
 import sys
 from tqdm import tqdm
@@ -375,14 +375,13 @@ class Engine:
                 )
                 cache = config.create_timing_cache(timing_cache_data)
         except FileNotFoundError:
-            error(
+            warning(
                 "Timing cache file {} not found, falling back to empty timing cache.".format(
                     timing_cache
                 )
             )
-            return 1
         if cache is not None:
-            config.set_timing_cache(cache, ignore_mismatch=False)
+            config.set_timing_cache(cache, ignore_mismatch=True)
 
         profiles = copy.deepcopy(p)
         for profile in profiles:

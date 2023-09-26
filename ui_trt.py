@@ -82,7 +82,7 @@ def export_unet_to_trt(
     )
     yield logging_history
 
-    timing_cache = modelmanager.get_timing_cache(allow_remote=False)
+    timing_cache = modelmanager.get_timing_cache()
 
     version = get_version_from_model(shared.sd_model)
 
