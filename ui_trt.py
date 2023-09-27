@@ -94,6 +94,8 @@ def export_unet_to_trt(
     min_textlen = (token_count_min // 75) * 77
     opt_textlen = (token_count_opt // 75) * 77
     max_textlen = (token_count_max // 75) * 77
+    if static_shapes:
+        min_textlen = max_textlen = opt_textlen
 
     if shared.sd_model.is_sdxl:
         pipeline = PIPELINE_TYPE.SD_XL_BASE
@@ -126,6 +128,7 @@ def export_unet_to_trt(
         width_max,
         static_shapes,
     )
+    print(profile)
 
     if not os.path.exists(onnx_path):
         logging_history = log_md(logging_history, "No ONNX file found. Exporting...")
@@ -554,6 +557,7 @@ def on_ui_tabs():
                                     value=default_vals[0],
                                     elem_id="trt_min_batch",
                                 )
+
                                 trt_opt_batch = gr.Slider(
                                     minimum=1,
                                     maximum=16,

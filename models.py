@@ -310,6 +310,18 @@ class BaseModel:
             )
         return min_h // 8, opt_h // 8, max_h // 8, min_w // 8, opt_w // 8, max_w // 8
 
+    def get_batch_dim(self, min_batch, opt_batch, max_batch, static_batch):
+        if self.text_maxlen <= 77:
+            return (min_batch * 2, opt_batch * 2, max_batch * 2)
+        elif self.text_maxlen > 77 and static_batch:
+            return (opt_batch, opt_batch, opt_batch)
+        elif self.text_maxlen > 77 and not static_batch:
+            if self.text_optlen > 77:
+                return (min_batch, opt_batch, max_batch * 2)
+            return (min_batch, opt_batch * 2, max_batch * 2)
+        else:
+            raise Exception("Uncovered case in get_batch_dim")
+
 
 class CLIP(BaseModel):
     def __init__(
@@ -863,14 +875,9 @@ class OAIUNet(BaseModel):
         max_w,
         static_shape,
     ):
-        if self.text_maxlen <= 77:
-            min_batch *= 2
-            opt_batch *= 2
-            max_batch *= 2
-        elif self.text_maxlen > 77 and not static_shape:
-            opt_batch *= 2
-            max_batch *= 2
-
+        min_batch, opt_batch, max_batch = self.get_batch_dim(
+            min_batch, opt_batch, max_batch, static_shape
+        )
         (
             min_latent_height,
             latent_height,
@@ -1104,13 +1111,9 @@ class OAIUNetXL(BaseModel):
         max_w,
         static_shape,
     ):
-        if self.text_maxlen <= 77:
-            min_batch *= 2
-            opt_batch *= 2
-            max_batch *= 2
-        elif self.text_maxlen > 77 and not static_shape:
-            opt_batch *= 2
-            max_batch *= 2
+        min_batch, opt_batch, max_batch = self.get_batch_dim(
+            min_batch, opt_batch, max_batch, static_shape
+        )
 
         (
             min_latent_height,
