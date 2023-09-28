@@ -56,10 +56,26 @@ def export_unet_to_trt(
     token_count_max,
     force_export,
     static_shapes,
+    preset,
     controlnet=None,
 ):
     logging_history = ""
 
+    if preset == "None":
+        (
+            batch_min,
+            batch_opt,
+            batch_max,
+            height_min,
+            height_opt,
+            height_max,
+            width_min,
+            width_opt,
+            width_max,
+            token_count_min,
+            token_count_opt,
+            token_count_max,
+        ) = export_default_unet_to_trt()
     is_inpaint = False
     use_fp32 = False
     if cc_major < 7:
@@ -294,6 +310,38 @@ def export_lora_to_trt(lora_name, force_export):
     yield logging_history + "\n --- \n ## Exported Successfully \n"
 
 
+def export_default_unet_to_trt():
+    is_xl = shared.sd_model.is_sdxl
+
+    batch_min = 1
+    batch_opt = 1
+    batch_max = 4
+    height_min = 768 if is_xl else 512
+    height_opt = 1024 if is_xl else 512  # TODO 768 or 512
+    height_max = 1024 if is_xl else 768
+    width_min = 768 if is_xl else 512
+    width_opt = 1024 if is_xl else 512  # TODO 768 or 512
+    width_max = 1024 if is_xl else 768
+    token_count_min = 75
+    token_count_opt = 75
+    token_count_max = 150
+
+    return (
+        batch_min,
+        batch_opt,
+        batch_max,
+        height_min,
+        height_opt,
+        height_max,
+        width_min,
+        width_opt,
+        width_max,
+        token_count_min,
+        token_count_opt,
+        token_count_max,
+    )
+
+
 profile_presets = {
     "512x512 | Batch Size 1 (Static)": (
         1,
@@ -337,10 +385,10 @@ profile_presets = {
         75,
         75,
     ),
-    "256x256 - 512x512 | Batch Size 1-2 (Dynamic)": (
+    "256x256 - 512x512 | Batch Size 1-4 (Dynamic)": (
         1,
         1,
-        2,
+        4,
         256,
         512,
         512,
@@ -351,10 +399,10 @@ profile_presets = {
         75,
         150,
     ),
-    "512x512 - 768x768 | Batch Size 1-2 (Dynamic)": (
+    "512x512 - 768x768 | Batch Size 1-4 (Dynamic)": (
         1,
         1,
-        2,
+        4,
         512,
         512,
         768,
@@ -365,14 +413,14 @@ profile_presets = {
         75,
         150,
     ),
-    "768x768 - 1024x1024 | Batch Size 1-2 (Dynamic)": (
+    "768x768 - 1024x1024 | Batch Size 1-4 (Dynamic)": (
         1,
         1,
-        2,
-        512,
+        4,
+        768,
         1024,
         1024,
-        512,
+        768,
         1024,
         1024,
         75,
@@ -384,16 +432,18 @@ profile_presets = {
 
 def get_settings_from_version(version):
     static = False
+    if version == "None":
+        return *list(profile_presets.values())[-2], static
     if "Static" in version:
         static = True
     return *profile_presets[version], static
 
 
 def diable_export(version):
-    if version is None:
-        return gr.update(visible=False)
+    if version == "None":
+        return gr.update(visible=False), gr.update(visible=True)
     else:
-        return gr.update(visible=True)
+        return gr.update(visible=True), gr.update(visible=False)
 
 
 def diable_visibility(hide):
@@ -532,10 +582,10 @@ def on_ui_tabs():
                         default_vals = list(profile_presets.values())[-2]
                         version = gr.Dropdown(
                             label="Preset",
-                            choices=list(profile_presets.keys()),
+                            choices=list(profile_presets.keys()) + [None],
                             elem_id="sd_version",
-                            default=default_version,
-                            value=default_version
+                            default=None,
+                            value=None,
                         )
 
                         with gr.Accordion("Advanced Settings", open=False):
@@ -544,7 +594,7 @@ def on_ui_tabs():
                             ):
                                 static_shapes = gr.Checkbox(
                                     label="Use static shapes.",
-                                    value=default_vals[-1],
+                                    value=False,
                                     elem_id="trt_static_shapes",
                                 )
 
@@ -653,7 +703,6 @@ def on_ui_tabs():
                                     elem_id="trt_opt_token_count_max",
                                 )
 
-
                             with FormRow(
                                 elem_classes="checkboxes-row", variant="compact"
                             ):
@@ -664,9 +713,16 @@ def on_ui_tabs():
                                 )
 
                         button_export_unet = gr.Button(
-                            value="Convert Unet to TensorRT",
+                            value="Export Engine",
                             variant="primary",
                             elem_id="trt_export_unet",
+                            visible=False,
+                        )
+
+                        button_export_default_unet = gr.Button(
+                            value="Export Default Engine",
+                            variant="primary",
+                            elem_id="trt_export_default_unet",
                             visible=True,
                         )
 
@@ -689,7 +745,12 @@ def on_ui_tabs():
                                 static_shapes,
                             ],
                         )
-                        # version.change(diable_export, version, button_export_unet)
+                        version.change(
+                            diable_export,
+                            version,
+                            [button_export_unet, button_export_default_unet],
+                        )
+
                         static_shapes.change(
                             diable_visibility,
                             static_shapes,
@@ -789,6 +850,29 @@ def on_ui_tabs():
                 trt_token_count_max,
                 force_rebuild,
                 static_shapes,
+                version,
+            ],
+            outputs=[trt_result],
+        )
+
+        button_export_default_unet.click(
+            export_unet_to_trt,
+            inputs=[
+                trt_min_batch,
+                trt_opt_batch,
+                trt_max_batch,
+                trt_height_min,
+                trt_height_opt,
+                trt_height_max,
+                trt_width_min,
+                trt_width_opt,
+                trt_width_max,
+                trt_token_count_min,
+                trt_token_count_opt,
+                trt_token_count_max,
+                force_rebuild,
+                static_shapes,
+                version,
             ],
             outputs=[trt_result],
         )
