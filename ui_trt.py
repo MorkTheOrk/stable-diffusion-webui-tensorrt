@@ -61,7 +61,7 @@ def export_unet_to_trt(
 ):
     logging_history = ""
 
-    if preset == "None":
+    if preset == "Default":
         (
             batch_min,
             batch_opt,
@@ -81,7 +81,7 @@ def export_unet_to_trt(
     if cc_major < 7:
         use_fp32 = True
         logging_history = log_md(
-            logging_history, "Disabling FP16 because your GPU does not support it."
+            logging_history, "FP16 has been disabled because your GPU does not support it."
         )
         yield logging_history
 
@@ -147,7 +147,7 @@ def export_unet_to_trt(
     print(profile)
 
     if not os.path.exists(onnx_path):
-        logging_history = log_md(logging_history, "No ONNX file found. Exporting...")
+        logging_history = log_md(logging_history, "No ONNX file found. Exporting ONNX…")
         yield logging_history
         export_onnx(
             onnx_path,
@@ -165,7 +165,7 @@ def export_unet_to_trt(
     if not os.path.exists(trt_path) or force_export:
         logging_history = log_md(
             logging_history,
-            "No TensorRT engine found. Building... This can take a while, please check the progress in the terminal.",
+            "Building TensorRT engine... This can take a while, please check the progress in the terminal.",
         )
         yield logging_history
         gc.collect()
@@ -199,7 +199,7 @@ def export_unet_to_trt(
     else:
         logging_history = log_md(
             logging_history,
-            "TensorRT engine found. Skipping build. You can enable Force Export in the Expert settings to force a rebuild.",
+            "TensorRT engine found. Skipping build. You can enable Force Export in the Advanced Settings to force a rebuild if needed.",
         )
         yield logging_history
 
@@ -213,7 +213,7 @@ def export_lora_to_trt(lora_name, force_export):
     if cc_major < 7:
         use_fp32 = True
         logging_history = log_md(
-            logging_history, "Disabling FP16 because your GPU does not support it."
+            logging_history, "FP16 has been disabled because your GPU does not support it."
         )
         yield logging_history
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
@@ -259,7 +259,7 @@ def export_lora_to_trt(lora_name, force_export):
         diable_optimizations = False
 
     if not os.path.exists(onnx_lora_path):
-        logging_history = log_md(logging_history, "No ONNX file found. Exporting...")
+        logging_history = log_md(logging_history, "No ONNX file found. Exporting ONNX…")
         yield logging_history
         export_onnx(
             onnx_lora_path,
@@ -317,10 +317,10 @@ def export_default_unet_to_trt():
     batch_opt = 1
     batch_max = 4
     height_min = 768 if is_xl else 512
-    height_opt = 1024 if is_xl else 512  # TODO 768 or 512
+    height_opt = 1024 if is_xl else 512
     height_max = 1024 if is_xl else 768
     width_min = 768 if is_xl else 512
-    width_opt = 1024 if is_xl else 512  # TODO 768 or 512
+    width_opt = 1024 if is_xl else 512
     width_max = 1024 if is_xl else 768
     token_count_min = 75
     token_count_opt = 75
@@ -432,7 +432,7 @@ profile_presets = {
 
 def get_settings_from_version(version):
     static = False
-    if version == "None":
+    if version == "Default":
         return *list(profile_presets.values())[-2], static
     if "Static" in version:
         static = True
@@ -440,10 +440,10 @@ def get_settings_from_version(version):
 
 
 def diable_export(version):
-    if version == "None":
-        return gr.update(visible=False), gr.update(visible=True)
+    if version == "Default":
+        return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
     else:
-        return gr.update(visible=True), gr.update(visible=False)
+        return gr.update(visible=True), gr.update(visible=False), gr.update(visible=True)
 
 
 def diable_visibility(hide):
@@ -582,13 +582,13 @@ def on_ui_tabs():
                         default_vals = list(profile_presets.values())[-2]
                         version = gr.Dropdown(
                             label="Preset",
-                            choices=list(profile_presets.keys()) + [None],
+                            choices=list(profile_presets.keys()) + ["Default"],
                             elem_id="sd_version",
-                            default=None,
-                            value=None,
+                            default="Default",
+                            value="Default",
                         )
 
-                        with gr.Accordion("Advanced Settings", open=False):
+                        with gr.Accordion("Advanced Settings", open=False, visible=False) as advanced_settings:
                             with FormRow(
                                 elem_classes="checkboxes-row", variant="compact"
                             ):
@@ -748,7 +748,7 @@ def on_ui_tabs():
                         version.change(
                             diable_export,
                             version,
-                            [button_export_unet, button_export_default_unet],
+                            [button_export_unet, button_export_default_unet, advanced_settings],
                         )
 
                         static_shapes.change(

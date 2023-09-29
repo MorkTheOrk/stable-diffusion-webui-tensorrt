@@ -11,7 +11,7 @@ import ui_trt
 from utilities import Engine
 from typing import List
 from model_manager import TRT_MODEL_DIR, modelmanager
-from time import time
+from modules import sd_models, shared
 
 
 class TrtUnetOption(sd_unet.SdUnetOption):
@@ -26,7 +26,28 @@ class TrtUnetOption(sd_unet.SdUnetOption):
             lora_path = os.path.join(TRT_MODEL_DIR, self.configs[0]["filepath"])
             self.model_name = self.configs[0]["base_model"]
             self.configs = modelmanager.available_models()[self.model_name]
+        validate_sd_version(self.model_name, exact=True)
         return TrtUnet(self.model_name, self.configs, lora_path)
+
+
+def validate_sd_version(model_name, exact=False):
+    loaded_model = shared.sd_model.sd_checkpoint_info.model_name
+    if exact:
+        if not loaded_model == model_name:
+            raise ValueError(
+                f"Selected torch model ({loaded_model}) does not match the selected TensorRT U-Net ({model_name}). Please ensure that both models are the same."
+            )
+    else:
+        if shared.sd_model.is_sdxl:
+            if not "xl" in model_name:
+                raise ValueError(
+                    f"Selected torch model ({loaded_model}) does not match the selected TensorRT U-Net ({model_name}). Please ensure that both models are the same."
+                )
+        loaded_version = 1 if shared.sd_model.is_sd1 else 2
+        if f"v{loaded_version}" not in model_name:
+            raise ValueError(
+                f"Selected torch model ({loaded_model}) does not match the selected TensorRT U-Net ({model_name}). Please ensure that both models are the same."
+            )
 
 
 class TrtUnet(sd_unet.SdUnet):
@@ -85,7 +106,7 @@ class TrtUnet(sd_unet.SdUnet):
         )
         if len(valid_models) == 0:
             raise ValueError(
-                "No valid profile found. Please exort a TensorRT engine with the necessary profile. Or use the default (torch) U-Net."
+                "No valid profile found. Please go to the TensorRT tab and generate an engine with the necessary profile. Or use the default (torch) U-Net."
             )
 
         best = valid_models[np.argmin(distances)]

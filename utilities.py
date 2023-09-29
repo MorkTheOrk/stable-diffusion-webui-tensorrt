@@ -453,7 +453,7 @@ class Engine:
         nvtx.range_push("execute")
         noerror = self.context.execute_async_v3(stream)
         if not noerror:
-            raise ValueError(f"ERROR: inference failed.")
+            raise ValueError("ERROR: inference failed.")
         nvtx.range_pop()
         return self.tensors
 

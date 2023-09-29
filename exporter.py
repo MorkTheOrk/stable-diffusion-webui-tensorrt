@@ -29,7 +29,7 @@ def apply_lora(model, lora_path, inputs):
         lora_net = importlib.import_module("extra_networks_lora")
     except Exception as e:
         error(e)
-        error("Lora not found. Please install Lora extension first from ...")
+        error("LoRA not found. Please install LoRA extension first from ...")
     model.forward(*inputs)
     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
     networks.load_networks(
@@ -60,6 +60,7 @@ def export_onnx(
             self.checkpoint = False
 
     shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
+    is_xl = shared.sd_model.is_sdxl
 
     sd_unet.apply_unet("None")
     sd_hijack.model_hijack.apply_optimizations("None")
@@ -100,7 +101,7 @@ def export_onnx(
         else:
             onnx_opt_graph = modelobj.optimize(onnx_graph)
 
-        if onnx_opt_graph.ByteSize() > 2147483648:
+        if onnx_opt_graph.ByteSize() > 2147483648 or is_xl:
             onnx.save_model(
                 onnx_opt_graph,
                 onnx_path,
@@ -109,7 +110,18 @@ def export_onnx(
                 convert_attribute=False,
             )
         else:
-            onnx.save(onnx_opt_graph, onnx_path)
+            try:
+                onnx.save(onnx_opt_graph, onnx_path)
+            except Exception as e:
+                error(e)
+                error("ONNX file too large. Saving as external data.")
+                onnx.save_model(
+                    onnx_opt_graph,
+                    onnx_path,
+                    save_as_external_data=True,
+                    all_tensors_to_one_file=True,
+                    convert_attribute=False,
+                )
         info("ONNX export complete.")
         del onnx_opt_graph
     except Exception as e:
