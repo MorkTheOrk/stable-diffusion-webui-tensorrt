@@ -445,6 +445,11 @@ def diable_export(version):
     else:
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=True)
 
+def disable_lora_export(lora):
+    if lora is None:
+        return gr.update(visible=False)
+    else:
+        return gr.update(visible=True)
 
 def diable_visibility(hide):
     num_outputs = 8
@@ -801,7 +806,7 @@ def on_ui_tabs():
                             trt_lora_dropdown,
                         )
                         trt_lora_dropdown.change(
-                            diable_export, trt_lora_dropdown, button_export_lora_unet
+                            disable_lora_export, trt_lora_dropdown, button_export_lora_unet
                         )
 
             with gr.Column(variant="panel"):

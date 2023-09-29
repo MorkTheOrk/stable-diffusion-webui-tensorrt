@@ -131,8 +131,6 @@ def export_onnx(
     # CleanUp
     if swap_sdpa and old_sdpa:
         setattr(F, "scaled_dot_product_attention", old_sdpa)
-    sd_hijack.model_hijack.apply_optimizations()
-    sd_unet.apply_unet()
     shutil.rmtree(os.path.abspath("onnx_tmp"))
     del model
 
