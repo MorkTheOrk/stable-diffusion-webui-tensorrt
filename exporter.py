@@ -137,6 +137,11 @@ def export_onnx(
 
 def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
     engine = Engine(trt_path)
+
+    # TODO Still approx. 2gb of VRAM unaccounted for...
+    model = shared.sd_model.cpu()
+    torch.cuda.empty_cache()
+
     s = time.time()
     ret = engine.build(
         onnx_path,
@@ -149,4 +154,6 @@ def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
     )
     e = time.time()
     info(f"Time taken to build: {(e-s)}s")
+
+    shared.sd_model = model.cuda()
     return ret

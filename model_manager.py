@@ -69,13 +69,19 @@ class ModelManager:
                 for model_config in models:
                     if model_config["filepath"] not in trt_engines:
                         info(
-                            f"Model config outdated. {model_config.filepath} was not found"
+                            "Model config outdated. {} was not found".format(model_config["filepath"])
                         )
                         continue
                     tmp_config_list[model_config["filepath"]] = model_config
-                self.all_models[cc][base_model] = list(tmp_config_list.values())
+                
+                tmp_config_list = list(tmp_config_list.values()) 
+                if len(tmp_config_list) == 0:
+                    self.all_models[cc].pop(base_model)
+                else:
+                    self.all_models[cc][base_model] = models
 
         self.write_json()
+
 
     def __del__(self):
         self.update()

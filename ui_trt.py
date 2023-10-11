@@ -16,6 +16,8 @@ import torch
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
 from time import sleep
 from collections import defaultdict
+from modules.ui_common import refresh_symbol
+from modules.ui_components import ToolButton
 
 logging.basicConfig(level=logging.INFO)
 
@@ -195,7 +197,7 @@ def export_unet_to_trt(
             vram=0,
             unet_hidden_dim=unet_hidden_dim,
             lora=False,
-        )  # TODO vram?
+        )
     else:
         logging_history = log_md(
             logging_history,
@@ -529,7 +531,7 @@ def engine_profile_card():
             model_md[base_model].append(profile_table)
 
     for lora, base_model in loras_md.items():
-        model_md[lora] = model_md[base_model]
+        model_md[f"{lora} (*{base_model}*)"] = model_md[base_model]
 
     return model_md
 
@@ -821,12 +823,12 @@ def on_ui_tabs():
                 trt_result = gr.Markdown(elem_id="trt_result", value="")
 
         with gr.Column(variant="panel"):
-            with gr.Row(equal_height=False):
-                gr.Markdown(
-                    elem_id=f"trt_available_model_profiles",
-                    value=f"## Available TensorRT engine-profiles",
+            with gr.Row(equal_height=True, variant="compact"):
+                button_refresh_profiles = ToolButton(value=refresh_symbol, elem_id="trt_refresh_profiles", visible=True)
+                profile_header_md = gr.Markdown(
+                    value=f"## Available TensorRT Engine Profiles"
                 )
-                engines_md = engine_profile_card()
+            engines_md = engine_profile_card()
             for model, profiles in engines_md.items():
                 with gr.Row(equal_height=False):
                     row_name = model + " ({} Profiles)".format(len(profiles))
@@ -886,6 +888,15 @@ def on_ui_tabs():
             export_lora_to_trt,
             inputs=[trt_lora_dropdown, trt_lora_force_rebuild],
             outputs=[trt_result],
+        )
+
+        
+        # TODO Dynamically update available profiles. Not possible with gradio?!
+        button_refresh_profiles.click(
+                fn=shared.state.request_restart,
+                _js='restart_reload',
+                inputs=[],
+                outputs=[],
         )
 
     return [(trt_interface, "TensorRT", "tensorrt")]

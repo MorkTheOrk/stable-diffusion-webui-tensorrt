@@ -134,8 +134,8 @@ class TrtUnet(sd_unet.SdUnet):
 def list_unets(l):
     model = modelmanager.available_models()
     for k, v in model.items():
-        l.append(TrtUnetOption(k, v))
-
+        label = "{} ({})".format(k, v[0]["base_model"]) if v[0]["config"].lora else k
+        l.append(TrtUnetOption(label, v))
 
 script_callbacks.on_list_unets(list_unets)
 script_callbacks.on_ui_tabs(ui_trt.on_ui_tabs)
